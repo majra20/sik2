@@ -14,6 +14,10 @@ extern "C" {
 	#include "err.h"
 }
 
+#define MAX_UDP_SIZE 512000
+#define CMD_SIZE 10
+#define SIMPL_STRUCT 0
+#define CMPLX_STRUCT 1
 namespace po = boost::program_options;
 namespace fs = std::experimental::filesystem;
 
@@ -42,13 +46,25 @@ public:
     }
 };
 
+char *buffer;
+int calcSize(int type) {
+	if (type == SIMPL_STRUCT) {
+		return sizeof(struct simpl_cmd);
+	} else {
+		return sizeof(struct cmplx_cmd);
+	}
+}
+
 class Server {
 public:
+	std::vector<std::string> cmplx = {"ADD"};
+	std::vector<std::string> simpl = {"HELLO", "LIST", "GET", "DEL"};
 	char *mcast_addr;
 	in_port_t cmd_port;
 	unsigned int timeout;
 	FileManager *fm;
 	struct sockaddr_in local_address;
+	int udpSock;
 
 public: 
 	Server(int argc, const char *argv[]) {
@@ -100,6 +116,7 @@ public:
 	            syserr("TIMEOUT max value is 300.");
 	        unsigned int max_space = vm["MAX_SPACE"].as<unsigned int>();
 	        fm = new FileManager(max_space, shrd_fldr);
+	        udpSock = getUDPSock();
 		} catch (const po::error &e) {
 			syserr(e.what());
 		}
@@ -141,23 +158,35 @@ public:
 		return udpSock;
 	}
 
-	void receiveHello() {
-		int udpSock = getUDPSock();
-		struct sockaddr_in Sender_addr;
-		socklen_t socklen = sizeof(struct sockaddr);
-		struct simpl_cmd *recvbuff = (struct simpl_cmd*)malloc(sizeof(struct simpl_cmd));
-		ssize_t recvlen = recvfrom(udpSock, (struct simpl_cmd*)recvbuff, sizeof(*recvbuff), 0, (struct sockaddr *)&Sender_addr, &socklen);
-		if (recvlen < 0) {
-			std::cout << "timeout" << std::endl;
-			return;
-		}
-		std::cout << recvbuff->cmd << std::endl;
-		std::cout << "cmd seq " << be64toh(recvbuff->cmd_seq) << std::endl;
+	struct simpl_cmd *getSimplCmd() {
+		int size = calcSize(SIMPL_STRUCT);
+		struct simpl_cmd *ret = (struct simpl_cmd*)malloc(size);
+		std::cout << "w " << sizeof(*ret) << std::endl;
+		memcpy(ret, (struct simpl_cmd*)buffer, sizeof(*ret));
+		for (int i = 0; i < size; ++i)
+			buffer[i] = 0;
+		ret->cmd_seq = be64toh(ret->cmd_seq);
+		std::cout << ret->cmd << " " << ret->cmd_seq << std::endl;
+		return ret;
+	}
 
+	void handleCmd(std::string cmd, struct sockaddr_in Sender_addr) {
+		if (cmd == "ADD") {
+			// struct simpl_cmd *dg = getSimplCmd(); 
+			// handleAdd
+			// return;
+		}
+
+		struct simpl_cmd *dg = getSimplCmd(); 
+		receiveHello(dg, Sender_addr);
+		return;
+	}
+
+	void receiveHello(struct simpl_cmd *dg, struct sockaddr_in Sender_addr) {
 		struct cmplx_cmd *buffer = (struct cmplx_cmd*)malloc(sizeof(struct cmplx_cmd));
 		strcpy(buffer->cmd, "GOOD DAY");
 		buffer->cmd[8] = 0;
-		buffer->cmd_seq = (recvbuff->cmd_seq);
+		buffer->cmd_seq = htobe64(dg->cmd_seq);
 		buffer->param = htobe64(fm->free_space);
 
 		ssize_t length = sizeof(*buffer);
@@ -166,13 +195,24 @@ public:
 	    	syserr("sendto");
 
 	    std::cout << "send " <<  length << std::endl;
-	    close(udpSock);
 	}
 };
 
 int main(int argc, const char *argv[]) {
 	Server server(argc, argv);
+	int sock = server.udpSock;
+	buffer = (char*)malloc(MAX_UDP_SIZE);
 	while (true) {
-		server.receiveHello();
+		struct sockaddr_in Sender_addr;
+		socklen_t socklen = sizeof(struct sockaddr);
+		std::cout << "sdsad " << sizeof(*buffer) << std::endl;
+		if (recvfrom(sock, (char*)buffer, MAX_UDP_SIZE, 0, (struct sockaddr *)&Sender_addr, &socklen) < 0)
+			syserr("recvfrom 182");
+
+		std::string cmd = "";
+		for (int i = 0; i < CMD_SIZE; ++i)
+			cmd += buffer[i];
+
+		server.handleCmd(cmd, Sender_addr);
 	}
 }

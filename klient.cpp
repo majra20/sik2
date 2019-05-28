@@ -108,27 +108,30 @@ public:
 		return udpSock;
 	}
 
-	struct simpl_cmd *generateSimplCmd(std::string cmd) {
-		struct simpl_cmd *packet = (struct simpl_cmd *)malloc(sizeof(struct simpl_cmd));
+	struct simpl_cmd generateSimplCmd(std::string cmd) {
+		struct simpl_cmd packet;
 		for (int i = 0; i < (int)cmd.size(); ++i)
-			packet->cmd[i] = cmd[i];
-		packet->cmd[(int)cmd.size()] = 0;
-		packet->cmd_seq = htobe64(getCmdSeq());
-		activeCmdSeq.insert(packet->cmd_seq);
+			packet.cmd[i] = cmd[i];
+		packet.cmd[(int)cmd.size()] = 0;
+		packet.cmd_seq = htobe64(getCmdSeq());
 		return packet;
 	}
 
 	void discover() {
 		int udpSock = getUDPSock();
 		std::cout << "discover" << std::endl;
-		struct simpl_cmd *packet = generateSimplCmd("HELLO");
-		std::cout << packet->cmd << std::endl;
-		std::cout << packet->cmd_seq << std::endl;
+		struct simpl_cmd packet = generateSimplCmd("HELLO");
+		std::cout << packet.cmd << std::endl;
 		std::cout << sizeof(struct simpl_cmd) << std::endl;
 		socklen_t socklen = sizeof(struct sockaddr);
-		if (sendto(udpSock, (const char *)packet, sizeof(*packet), 0, (struct sockaddr *)&remote_address, socklen) != sizeof(*packet)) {
+		char *buff = (char*)malloc(sizeof(packet));
+		memcpy(buff, (char *)&packet,sizeof(packet));
+
+		std::cout << "wi " << sizeof(packet) << std::endl;
+		if (sendto(udpSock, buff, sizeof(packet), 0, (struct sockaddr *)&remote_address, socklen) != sizeof(packet)) {
 			syserr("sendto");
 		}
+		delete buff;
 
 		while (true) {
 			std::cout <<"odbieram" << std::endl;
