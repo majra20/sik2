@@ -48,18 +48,24 @@ public:
 
 char *buffer;
 int calcSize(int type) {
-	if (type == SIMPL_STRUCT) {
-		return sizeof(struct simpl_cmd);
-	} else {
-		return sizeof(struct cmplx_cmd);
+	int start = (type == SIMPL_STRUCT ? sizeof(struct simpl_cmd) : sizeof(struct cmplx_cmd));
+
+	for (int i = sizeof(struct simpl_cmd); i < MAX_UDP_SIZE; ++i) {
+		if (buffer[i] == 0) {
+			if (i == start)
+				return i;
+			return i + 1;
+		}
 	}
+
+	return -1;
 }
 
 class Server {
 public:
 	std::vector<std::string> cmplx = {"ADD"};
 	std::vector<std::string> simpl = {"HELLO", "LIST", "GET", "DEL"};
-	char *mcast_addr;
+	std::string mcast_addr;
 	in_port_t cmd_port;
 	unsigned int timeout;
 	FileManager *fm;
@@ -102,11 +108,7 @@ public:
             }
 	        if (!vm.count("SHRD_FLDR"))
 	            syserr("SHRD_FLDR is required.");
-	        std::string ma = vm["MCAST_ADDR"].as<std::string>();
-	        mcast_addr = new char[ma.length() + 1];
-	        for (int i = 0; i < (int)ma.size(); ++i)
-	        	mcast_addr[i] = ma[i];
-	        mcast_addr[ma.size()] = 0;
+	        mcast_addr = vm["MCAST_ADDR"].as<std::string>();
 	        cmd_port = vm["CMD_PORT"].as<in_port_t>();
 	        std::string shrd_fldr = vm["SHRD_FLDR"].as<std::string>();
 	        timeout = vm["TIMEOUT"].as<unsigned int>();
@@ -123,7 +125,6 @@ public:
 	}
 
 	~Server() {
-		delete[] mcast_addr;
 		delete fm;
 	}
 
@@ -134,7 +135,8 @@ public:
 
 	    ip_mreq ip_mreq{};
 	    ip_mreq.imr_interface.s_addr = htonl(INADDR_ANY);
-	    if (inet_aton(mcast_addr, &ip_mreq.imr_multiaddr) == 0) {
+	    std::cout << "dasd " << mcast_addr << std::endl;
+	    if (inet_aton(mcast_addr.c_str(), &ip_mreq.imr_multiaddr) == 0) {
 	    	syserr("inet_aton 118");
 	    }
 		if (setsockopt(udpSock, IPPROTO_IP, IP_ADD_MEMBERSHIP, (void*)&ip_mreq, sizeof ip_mreq) < 0) {
@@ -158,8 +160,10 @@ public:
 		return udpSock;
 	}
 
-	struct simpl_cmd *getSimplCmd() {
-		int size = calcSize(SIMPL_STRUCT);
+	struct simpl_cmd *getSimplCmd(int len) {
+		// int size = calcSize(len);
+		int size = len;
+		std::cout << "deklaruje size " << size << " " << sizeof(struct simpl_cmd) << std::endl;
 		struct simpl_cmd *ret = (struct simpl_cmd*)malloc(size);
 		std::cout << "w " << sizeof(*ret) << std::endl;
 		memcpy(ret, (struct simpl_cmd*)buffer, sizeof(*ret));
@@ -170,31 +174,53 @@ public:
 		return ret;
 	}
 
-	void handleCmd(std::string cmd, struct sockaddr_in Sender_addr) {
+	void handleCmd(std::string cmd, struct sockaddr_in Sender_addr, int len) {
 		if (cmd == "ADD") {
-			// struct simpl_cmd *dg = getSimplCmd(); 
-			// handleAdd
-			// return;
+			
 		}
 
-		struct simpl_cmd *dg = getSimplCmd(); 
+		struct simpl_cmd *dg = getSimplCmd(len);
 		receiveHello(dg, Sender_addr);
 		return;
 	}
 
+	int getSizeWithData(int type, int len) {
+		int size = (type == SIMPL_STRUCT ? sizeof(struct simpl_cmd) : sizeof(struct cmplx_cmd));
+		if (len == 0)
+			return size;
+		size += len + 1;
+		return size;
+	}
+
+	struct cmplx_cmd *generateCmplxCmd(std::string cmd, uint64_t cmd_seq, uint64_t param, std::string data) {
+		int size = getSizeWithData(CMPLX_STRUCT, data.size());
+		struct cmplx_cmd *ret = (struct cmplx_cmd*)malloc(size);
+		strcpy(ret->cmd, cmd.c_str());
+		ret->cmd_seq = htobe64(cmd_seq);
+		ret->param = htobe64(param);
+		if (data.size() != 0) 
+			strcpy(ret->data, data.c_str());
+		return ret;
+	}
+
+	struct simpl_cmd *generateSimplCmd(std::string cmd, uint64_t cmd_seq, std::string data) {
+		int size = getSizeWithData(SIMPL_STRUCT, data.size());
+		struct simpl_cmd *ret = (struct simpl_cmd*)malloc(size);
+		strcpy(ret->cmd, cmd.c_str());
+		ret->cmd_seq = htobe64(cmd_seq);
+		if (data.size() != 0) 
+			strcpy(ret->data, data.c_str());
+		return ret;
+	}
+
 	void receiveHello(struct simpl_cmd *dg, struct sockaddr_in Sender_addr) {
-		struct cmplx_cmd *buffer = (struct cmplx_cmd*)malloc(sizeof(struct cmplx_cmd));
-		strcpy(buffer->cmd, "GOOD DAY");
-		buffer->cmd[8] = 0;
-		buffer->cmd_seq = htobe64(dg->cmd_seq);
-		buffer->param = htobe64(fm->free_space);
-
-		ssize_t length = sizeof(*buffer);
-
-	    if (sendto(udpSock, (const char*)buffer, sizeof(*buffer), 0, (struct sockaddr *)&Sender_addr, sizeof(Sender_addr)) != length) 
+		struct cmplx_cmd *buffer = generateCmplxCmd("GOOD DAY", dg->cmd_seq, fm->free_space, mcast_addr);
+		ssize_t length = getSizeWithData(CMPLX_STRUCT, mcast_addr.size());
+		std::cout << "hello " << length << " " << sizeof(struct cmplx_cmd) << std::endl;
+		socklen_t slen = sizeof(struct sockaddr);
+	    if (sendto(udpSock, (const char*)buffer, length, 0, (struct sockaddr *)&Sender_addr, slen) != length) 
 	    	syserr("sendto");
-
-	    std::cout << "send " <<  length << std::endl;
+	    delete buffer;
 	}
 };
 
@@ -205,14 +231,14 @@ int main(int argc, const char *argv[]) {
 	while (true) {
 		struct sockaddr_in Sender_addr;
 		socklen_t socklen = sizeof(struct sockaddr);
-		std::cout << "sdsad " << sizeof(*buffer) << std::endl;
-		if (recvfrom(sock, (char*)buffer, MAX_UDP_SIZE, 0, (struct sockaddr *)&Sender_addr, &socklen) < 0)
+		int len = recvfrom(sock, (char*)buffer, MAX_UDP_SIZE, 0, (struct sockaddr *)&Sender_addr, &socklen);
+		if (len < 0)
 			syserr("recvfrom 182");
 
 		std::string cmd = "";
 		for (int i = 0; i < CMD_SIZE; ++i)
 			cmd += buffer[i];
 
-		server.handleCmd(cmd, Sender_addr);
+		server.handleCmd(cmd, Sender_addr, len);
 	}
 }

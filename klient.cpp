@@ -15,6 +15,10 @@ extern "C" {
 
 namespace po = boost::program_options;
 
+#define MAX_UDP_SIZE 	512000
+#define CMD_SIZE 		10
+#define SIMPL_STRUCT 	0
+#define CMPLX_STRUCT 	1
 #define TTL_VALUE		4
 
 class Client {
@@ -108,49 +112,53 @@ public:
 		return udpSock;
 	}
 
-	struct simpl_cmd generateSimplCmd(std::string cmd) {
-		struct simpl_cmd packet;
-		for (int i = 0; i < (int)cmd.size(); ++i)
-			packet.cmd[i] = cmd[i];
-		packet.cmd[(int)cmd.size()] = 0;
-		packet.cmd_seq = htobe64(getCmdSeq());
-		return packet;
+	struct simpl_cmd *generateSimplCmd(std::string cmd, uint64_t cmd_seq, std::string data) {
+		std::cout << "seq " << cmd_seq << std::endl;
+		int size = getSizeWithData(SIMPL_STRUCT, data.size());
+		struct simpl_cmd *ret = (struct simpl_cmd*)malloc(size);
+		strcpy(ret->cmd, cmd.c_str());
+		ret->cmd_seq = htobe64(cmd_seq);
+		if (data.size() != 0) 
+			strcpy(ret->data, data.c_str());
+		return ret;
+	}
+
+	int getSizeWithData(int type, int len) {
+		int size = (type == SIMPL_STRUCT ? sizeof(struct simpl_cmd) : sizeof(struct cmplx_cmd));
+		if (len == 0)
+			return size;
+		size += len + 1;
+		return size;
 	}
 
 	void discover() {
 		int udpSock = getUDPSock();
 		std::cout << "discover" << std::endl;
-		struct simpl_cmd packet = generateSimplCmd("HELLO");
-		std::cout << packet.cmd << std::endl;
-		std::cout << sizeof(struct simpl_cmd) << std::endl;
-		socklen_t socklen = sizeof(struct sockaddr);
-		char *buff = (char*)malloc(sizeof(packet));
-		memcpy(buff, (char *)&packet,sizeof(packet));
-
-		std::cout << "wi " << sizeof(packet) << std::endl;
-		if (sendto(udpSock, buff, sizeof(packet), 0, (struct sockaddr *)&remote_address, socklen) != sizeof(packet)) {
+		struct simpl_cmd *buffer = generateSimplCmd("HELLO", getCmdSeq(), "");
+		std::cout << "SEND HELLO " << getSizeWithData(SIMPL_STRUCT, 0) << " " << sizeof(buffer) << std::endl;
+		int length = getSizeWithData(SIMPL_STRUCT, 0);
+		socklen_t slen = sizeof(struct sockaddr);
+		if (sendto(udpSock, (const char*)buffer, length, 0, (struct sockaddr *)&remote_address, slen) != length) {
 			syserr("sendto");
-		}
-		delete buff;
+		}		
+		delete buffer;
 
+		char *buff = (char*)malloc(sizeof(struct cmplx_cmd) + 16);
 		while (true) {
-			std::cout <<"odbieram" << std::endl;
 			struct sockaddr_in Sender_addr;
-			socklen_t socklen = sizeof(struct sockaddr);
-			struct cmplx_cmd *recvbuff = (struct cmplx_cmd*)malloc(sizeof(struct cmplx_cmd));
-			ssize_t rcv_len = recvfrom(udpSock, (struct cmplx_cmd*)recvbuff, sizeof(*recvbuff), 0, (struct sockaddr *)&Sender_addr, &socklen);
-			// ssize_t rcv_len = recv(udpSock, (struct cmplx_cmd*)recvbuff, sizeof(*recvbuff), 0);
-
+			slen = sizeof(struct sockaddr);
+			ssize_t rcv_len = recvfrom(udpSock, buff, sizeof(struct cmplx_cmd) + 16, 0, (struct sockaddr *)&Sender_addr, &slen);
 	        if (rcv_len < 0) {
-	       		std::cout << "timeout" << std::endl;
-	        	delete recvbuff;
 	        	break;
 	        } else {
-	        	std::cout << be64toh(recvbuff->cmd_seq) << " " << recvbuff->cmd << " " << be64toh(recvbuff->param) << std::endl;
-	        	delete recvbuff;
+				struct cmplx_cmd *recvbuff = (struct cmplx_cmd*)buff;
+				char ip[INET_ADDRSTRLEN];
+				if (inet_ntop(AF_INET, &(Sender_addr.sin_addr), ip, INET_ADDRSTRLEN) == 0)
+					syserr("inet_ntop 162");
+				std::cout << "Found " << ip << " (" << recvbuff->data << ") with free space " << be64toh(recvbuff->param) << std::endl;
 	        }
-
 	    }
+	    delete buff;
 	}
 
 	void fetch(std::string s) {
