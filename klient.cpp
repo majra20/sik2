@@ -26,7 +26,6 @@ public:
 	uint64_t cmd_seq;
 	std::unordered_set<std::string> fetch_files;
 	std::set<unsigned int> activeCmdSeq;
-	int udpSock;
 	struct sockaddr_in remote_address;
 
 public: 
@@ -81,11 +80,10 @@ public:
 
 	~Client() {
 		delete[] mcast_addr;
-		close(udpSock);
 	}
 
-	void setUDPSock() {
-		udpSock = socket(AF_INET, SOCK_DGRAM, 0);
+	int getUDPSock() {
+		int udpSock = socket(AF_INET, SOCK_DGRAM, 0);
 	    if (udpSock < 0)
 	        syserr("socket");
 	    int optval = 1;
@@ -100,10 +98,14 @@ public:
 	    if (setsockopt(udpSock, SOL_SOCKET, SO_RCVTIMEO, (void*)&t, sizeof t)) {
 	        syserr("setsockopt timeout");
 	    }
+	    if (setsockopt(udpSock, SOL_SOCKET, SO_SNDTIMEO, (void*)&t, sizeof t)) {
+	        syserr("setsockopt timeout");
+	    }
 		remote_address.sin_family = AF_INET;
 		remote_address.sin_port = htons(cmd_port);
 		if (inet_aton(mcast_addr, &remote_address.sin_addr) == 0)
 		    syserr("inet_aton");
+		return udpSock;
 	}
 
 	struct simpl_cmd *generateSimplCmd(std::string cmd) {
@@ -117,6 +119,7 @@ public:
 	}
 
 	void discover() {
+		int udpSock = getUDPSock();
 		std::cout << "discover" << std::endl;
 		struct simpl_cmd *packet = generateSimplCmd("HELLO");
 		std::cout << packet->cmd << std::endl;
@@ -140,7 +143,7 @@ public:
 	        	delete recvbuff;
 	        	break;
 	        } else {
-	        	std::cout << ntohl(recvbuff->cmd_seq) << " " << recvbuff->cmd << " " << ntohl(recvbuff->param) << std::endl;
+	        	std::cout << be64toh(recvbuff->cmd_seq) << " " << recvbuff->cmd << " " << be64toh(recvbuff->param) << std::endl;
 	        	delete recvbuff;
 	        }
 
@@ -175,7 +178,6 @@ private:
 
 int main(int argc, const char *argv[]) {
 	Client client(argc, argv);
-	client.setUDPSock();
 	std::cout << client.mcast_addr << std::endl;
 	std::cout << client.cmd_port << std::endl;
 	std::cout << client.out_fldr << std::endl;
