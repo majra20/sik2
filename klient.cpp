@@ -135,6 +135,7 @@ public:
 		int udpSock = getUDPSock();
 		std::cout << "discover" << std::endl;
 		struct simpl_cmd *buffer = generateSimplCmd("HELLO", getCmdSeq(), "");
+		uint64_t orgCmdSeq = buffer->cmd_seq;
 		std::cout << "SEND HELLO " << getSizeWithData(SIMPL_STRUCT, 0) << " " << sizeof(buffer) << std::endl;
 		int length = getSizeWithData(SIMPL_STRUCT, 0);
 		socklen_t slen = sizeof(struct sockaddr);
@@ -143,7 +144,7 @@ public:
 		}		
 		delete buffer;
 
-		char *buff = (char*)malloc(sizeof(struct cmplx_cmd) + 16);
+		char *buff = (char*)malloc(sizeof(struct cmplx_cmd) + INET_ADDRSTRLEN);
 		while (true) {
 			struct sockaddr_in Sender_addr;
 			slen = sizeof(struct sockaddr);
@@ -152,10 +153,11 @@ public:
 	        	break;
 	        } else {
 				struct cmplx_cmd *recvbuff = (struct cmplx_cmd*)buff;
+				assert(orgCmdSeq == recvbuff->cmd_seq);
 				char ip[INET_ADDRSTRLEN];
 				if (inet_ntop(AF_INET, &(Sender_addr.sin_addr), ip, INET_ADDRSTRLEN) == 0)
 					syserr("inet_ntop 162");
-				std::cout << "Found " << ip << " (" << recvbuff->data << ") with free space " << be64toh(recvbuff->param) << std::endl;
+				std::cout << recvbuff->cmd << " Found " << ip << " (" << recvbuff->data << ") with free space " << be64toh(recvbuff->param) << std::endl;
 	        }
 	    }
 	    delete buff;
@@ -166,7 +168,43 @@ public:
 	}
 
 	void search(std::string s) {
-		std::cout << "search" << std::endl;
+		if (s.size() > 0 && s[0] == ' ')
+			s.erase(0, 1);
+		std::cout << "search " << s << ";" << std::endl;
+		int udpSock = getUDPSock();
+		struct simpl_cmd *buffer = generateSimplCmd("LIST", getCmdSeq(), s);
+		uint64_t orgCmdSeq = buffer->cmd_seq;
+		int length = getSizeWithData(SIMPL_STRUCT, s.size());
+		std::cout << "size " << length << std::endl;
+		socklen_t slen = sizeof(struct sockaddr);
+		if (sendto(udpSock, (const char*)buffer, length, 0, (struct sockaddr *)&remote_address, slen) != length) {
+			syserr("sendto");
+		}
+		delete buffer;
+
+		char *buff = (char*)malloc(MAX_UDP_SIZE);
+		while (true) {
+			struct sockaddr_in Sender_addr;
+			slen = sizeof(struct sockaddr);
+			ssize_t rcv_len = recvfrom(udpSock, buff, MAX_UDP_SIZE, 0, (struct sockaddr *)&Sender_addr, &slen);
+	        if (rcv_len < 0) {
+	        	break;
+	        } else {
+	        	struct simpl_cmd *recvbuff = (struct simpl_cmd*)buff;
+	        	assert(recvbuff->cmd_seq == orgCmdSeq);
+	        	char ip[INET_ADDRSTRLEN];
+				if (inet_ntop(AF_INET, &(Sender_addr.sin_addr), ip, INET_ADDRSTRLEN) == 0)
+					syserr("inet_ntop 197");
+				for (int i = 0; i < MAX_UDP_SIZE; ++i) {
+					if (recvbuff->data[i] == 0)
+						break;
+					if (recvbuff->data[i] == '\n') 
+						std::cout << " " << ip << std::endl;
+					else
+						std::cout << recvbuff->data[i];
+				}
+	        }
+		}
 	}
 
 	void upload(std::string s) {

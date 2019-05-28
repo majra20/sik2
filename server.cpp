@@ -30,7 +30,6 @@ public:
 
     FileManager(unsigned int set_max_space, std::string set_path) 
     	: free_space(set_max_space), max_space(set_max_space), path(set_path) {
-    	std::cout << "wielkość " << max_space << std::endl;
     	for (const auto & entry : fs::directory_iterator(path)) {
             if (fs::is_regular_file(entry.path())) {
                 files.insert(entry.path().filename());
@@ -63,7 +62,6 @@ int calcSize(int type) {
 
 class Server {
 public:
-	std::vector<std::string> cmplx = {"ADD"};
 	std::vector<std::string> simpl = {"HELLO", "LIST", "GET", "DEL"};
 	std::string mcast_addr;
 	in_port_t cmd_port;
@@ -135,7 +133,6 @@ public:
 
 	    ip_mreq ip_mreq{};
 	    ip_mreq.imr_interface.s_addr = htonl(INADDR_ANY);
-	    std::cout << "dasd " << mcast_addr << std::endl;
 	    if (inet_aton(mcast_addr.c_str(), &ip_mreq.imr_multiaddr) == 0) {
 	    	syserr("inet_aton 118");
 	    }
@@ -161,16 +158,13 @@ public:
 	}
 
 	struct simpl_cmd *getSimplCmd(int len) {
-		// int size = calcSize(len);
-		int size = len;
-		std::cout << "deklaruje size " << size << " " << sizeof(struct simpl_cmd) << std::endl;
-		struct simpl_cmd *ret = (struct simpl_cmd*)malloc(size);
-		std::cout << "w " << sizeof(*ret) << std::endl;
-		memcpy(ret, (struct simpl_cmd*)buffer, sizeof(*ret));
-		for (int i = 0; i < size; ++i)
+		std::cout << "deklaruje size " << len << " " << sizeof(struct simpl_cmd) << std::endl;
+		struct simpl_cmd *ret = (struct simpl_cmd*)malloc(len);
+		memcpy(ret, (struct simpl_cmd*)buffer, len);
+		for (int i = 0; i < len; ++i)
 			buffer[i] = 0;
 		ret->cmd_seq = be64toh(ret->cmd_seq);
-		std::cout << ret->cmd << " " << ret->cmd_seq << std::endl;
+		std::cout << ret->cmd << " " << ret->cmd_seq << " " << ret->data << std::endl;
 		return ret;
 	}
 
@@ -178,9 +172,24 @@ public:
 		if (cmd == "ADD") {
 			
 		}
-
+		bool isOk = false;
+		for (auto s : simpl) {
+			if (cmd == s)
+				isOk = true;
+		}
+		std::cout << "Dostałem taką komende " << cmd << std::endl;
+		if (!isOk) {
+			char ip[INET_ADDRSTRLEN];
+			if (inet_ntop(AF_INET, &(Sender_addr.sin_addr), ip, INET_ADDRSTRLEN) == 0)
+				syserr("inet_ntop 162");
+			std::cout << "[PCKG ERROR] Skipping invalid package from " << ip << ":" << Sender_addr.sin_port << ". Bad cmd argument." << std::endl;
+			return;
+		}
 		struct simpl_cmd *dg = getSimplCmd(len);
-		receiveHello(dg, Sender_addr);
+		if (cmd == "HELLO")
+			receiveHello(dg, Sender_addr);
+		else
+			receiveList(dg, Sender_addr);
 		return;
 	}
 
@@ -213,14 +222,43 @@ public:
 		return ret;
 	}
 
+	void sendCmd(const char *buffer, ssize_t length, struct sockaddr_in Sender_addr) {
+		socklen_t slen = sizeof(struct sockaddr);
+	    if (sendto(udpSock, (const char*)buffer, length, 0, (struct sockaddr *)&Sender_addr, slen) != length) 
+	    	syserr("sendto");
+	}
+
 	void receiveHello(struct simpl_cmd *dg, struct sockaddr_in Sender_addr) {
 		struct cmplx_cmd *buffer = generateCmplxCmd("GOOD DAY", dg->cmd_seq, fm->free_space, mcast_addr);
 		ssize_t length = getSizeWithData(CMPLX_STRUCT, mcast_addr.size());
 		std::cout << "hello " << length << " " << sizeof(struct cmplx_cmd) << std::endl;
-		socklen_t slen = sizeof(struct sockaddr);
-	    if (sendto(udpSock, (const char*)buffer, length, 0, (struct sockaddr *)&Sender_addr, slen) != length) 
-	    	syserr("sendto");
+	    sendCmd((const char *)buffer, length, Sender_addr);
 	    delete buffer;
+	}
+
+	void receiveList(struct simpl_cmd *dg, struct sockaddr_in Sender_addr) {
+		std::string fileList = "";
+		std::string toFind(dg->data);
+		struct simpl_cmd *buffer;
+		for (auto file : fm->files) {
+			if (file.find(toFind) != std::string::npos) {
+				if (fileList.size() + file.size() + 1 > MAX_UDP_SIZE - 20) {
+					buffer = generateSimplCmd("MY_LIST", dg->cmd_seq, fileList);
+					ssize_t length = getSizeWithData(SIMPL_STRUCT, fileList.size());
+					sendCmd((const char*)buffer, length, Sender_addr);
+				    delete buffer;
+				    fileList = "";
+				}
+				fileList += file + '\n';
+			}
+		}
+
+		if (fileList.size() != 0) {
+			buffer = generateSimplCmd("MY_LIST", dg->cmd_seq, fileList);
+			ssize_t length = getSizeWithData(SIMPL_STRUCT, fileList.size());
+			sendCmd((const char*)buffer, length, Sender_addr);
+			delete buffer;
+		}
 	}
 };
 
@@ -236,8 +274,11 @@ int main(int argc, const char *argv[]) {
 			syserr("recvfrom 182");
 
 		std::string cmd = "";
-		for (int i = 0; i < CMD_SIZE; ++i)
+		for (int i = 0; i < CMD_SIZE; ++i) {
+			if (buffer[i] == 0)
+				break;
 			cmd += buffer[i];
+		}
 
 		server.handleCmd(cmd, Sender_addr, len);
 	}
