@@ -11,9 +11,7 @@
 #include <cstring>
 
 #include "cmd.h"
-extern "C" {
-	#include "err.h"
-}
+#include "err.h"
 
 #define MAX_UDP_SIZE 512000
 #define CMD_SIZE 10

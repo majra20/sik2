@@ -10,9 +10,6 @@
 
 #include "network-manager.h"
 #include "cmd.h"
-extern "C" {
-	#include "err.h"
-}
 
 namespace po = boost::program_options;
 
@@ -146,8 +143,8 @@ public:
 		// 	return;
 		// if (s[0] == ' ')
 		// 	s.erase(0, 1);
-		// std::cout << "fetch" << std::endl;
 
+		// std::cout << "fetch" << std::endl;
 		// int found = -1;
 		// for (int i = 0; i < (int)serversFiles.size(); ++i) {
 		// 	if (serversFiles[i].first == s) 

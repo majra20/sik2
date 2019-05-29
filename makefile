@@ -4,7 +4,7 @@ GCCFLAGS = -std=c++17 -Wall -Wextra -O2
 LFLAGS = -lboost_program_options -lstdc++fs -pthread
 
 err.o: err.h err.c
-	gcc -c $^
+	g++ -c $^
 
 netstore-server: server.cpp cmd.h err.o network-manager.h
 	g++ $(GCCFLAGS) $^ $(LFLAGS) -o $@
