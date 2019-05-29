@@ -127,18 +127,14 @@ public:
 			struct sockaddr_in Sender_addr;
 			socklen_t slen = sizeof(struct sockaddr);
 			ssize_t rcv_len = recvfrom(nm->udpSock, buff, sizeof(struct cmplx_cmd) + INET_ADDRSTRLEN, 0, (struct sockaddr *)&Sender_addr, &slen);
-			std::cout << "tu 0 " << rcv_len - sizeof(struct cmplx_cmd) << std::endl;
-			std::cout << "Odebraem " << rcv_len << std::endl;
 	        if (rcv_len < 0) {
 	        	break;
 	        } else {
 	        	buff[rcv_len] = 0;
 				struct cmplx_cmd *recvbuff = (struct cmplx_cmd*)buff;
 				assert(orgCmdSeq == recvbuff->cmd_seq);
-				char ip[INET_ADDRSTRLEN];
 				// dodaj handlowanie błędami
-				if (inet_ntop(AF_INET, &(Sender_addr.sin_addr), ip, INET_ADDRSTRLEN) == 0)
-					syserr("inet_ntop 162");
+				std::string ip = nm->getIpFromAddress(Sender_addr);
 				std::cout << recvbuff->cmd << " Found " << ip << " (" << recvbuff->data << ") with free space " << be64toh(recvbuff->param) << std::endl;
 	        }
 	    }
