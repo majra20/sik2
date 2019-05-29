@@ -8,16 +8,12 @@
 #include <unordered_set>
 #include <experimental/filesystem>
 #include <time.h>
+#include <thread>
+#include <csignal>
 
 #include "cmd.h"
-extern "C" {
-	#include "err.h"
-}
+#include "network-manager.h"
 
-#define MAX_UDP_SIZE 512000
-#define CMD_SIZE 10
-#define SIMPL_STRUCT 0
-#define CMPLX_STRUCT 1
 namespace po = boost::program_options;
 namespace fs = std::experimental::filesystem;
 
@@ -55,30 +51,21 @@ public:
     }
 };
 
-char *buffer;
-int calcSize(int type) {
-	int start = (type == SIMPL_STRUCT ? sizeof(struct simpl_cmd) : sizeof(struct cmplx_cmd));
-
-	for (int i = sizeof(struct simpl_cmd); i < MAX_UDP_SIZE; ++i) {
-		if (buffer[i] == 0) {
-			if (i == start)
-				return i;
-			return i + 1;
-		}
-	}
-
-	return -1;
+void interrupted(int signal) {
+	std::cout << "Ktoś mi wykurwił bombe" << std::endl;
+	exit(0);
 }
 
+char *buffer;
 class Server {
 public:
-	std::vector<std::string> simpl = {"HELLO", "LIST", "GET", "DEL"};
+	std::vector<std::string> simpl = {"HELLO", "LIST", "DEL"};
 	std::string mcast_addr;
 	in_port_t cmd_port;
 	unsigned int timeout;
 	FileManager *fm;
+	NetworkManager *nm;
 	struct sockaddr_in local_address;
-	int udpSock;
 
 public: 
 	Server(int argc, const char *argv[]) {
@@ -126,7 +113,7 @@ public:
 	            syserr("TIMEOUT max value is 300.");
 	        unsigned int max_space = vm["MAX_SPACE"].as<unsigned int>();
 	        fm = new FileManager(max_space, shrd_fldr);
-	        udpSock = getUDPSock();
+	        nm = new NetworkManager(getUDPSock());
 		} catch (const po::error &e) {
 			syserr(e.what());
 		}
@@ -134,6 +121,7 @@ public:
 
 	~Server() {
 		delete fm;
+		delete nm;
 	}
 
 	int getUDPSock() {
@@ -167,17 +155,6 @@ public:
 		return udpSock;
 	}
 
-	struct simpl_cmd *getSimplCmd(int len) {
-		std::cout << "deklaruje size " << len << " " << sizeof(struct simpl_cmd) << std::endl;
-		struct simpl_cmd *ret = (struct simpl_cmd*)malloc(len);
-		memcpy(ret, (struct simpl_cmd*)buffer, len);
-		for (int i = 0; i < len; ++i)
-			buffer[i] = 0;
-		ret->cmd_seq = be64toh(ret->cmd_seq);
-		std::cout << ret->cmd << " " << ret->cmd_seq << " " << ret->data << std::endl;
-		return ret;
-	}
-
 	void handleCmd(std::string cmd, struct sockaddr_in Sender_addr, int len) {
 		if (cmd == "ADD") {
 			
@@ -189,13 +166,11 @@ public:
 		}
 		std::cout << "Dostałem taką komende " << cmd << std::endl;
 		if (!isOk) {
-			char ip[INET_ADDRSTRLEN];
-			if (inet_ntop(AF_INET, &(Sender_addr.sin_addr), ip, INET_ADDRSTRLEN) == 0)
-				syserr("inet_ntop 162");
+			std::string ip = nm->getIpFromAddress(Sender_addr);
 			std::cout << "[PCKG ERROR] Skipping invalid package from " << ip << ":" << Sender_addr.sin_port << ". Bad cmd argument." << std::endl;
 			return;
 		}
-		struct simpl_cmd *dg = getSimplCmd(len);
+		struct simpl_cmd *dg = nm->getSimplCmd(buffer, len);
 		for (int i = 0; i < len; ++i)
 			buffer[i] = 0;
 		if (cmd == "HELLO")
@@ -208,46 +183,17 @@ public:
 		return;
 	}
 
-	int getSizeWithData(int type, int len) {
-		int size = (type == SIMPL_STRUCT ? sizeof(struct simpl_cmd) : sizeof(struct cmplx_cmd));
-		if (len == 0)
-			return size;
-		size += len + 1;
-		return size;
-	}
-
-	struct cmplx_cmd *generateCmplxCmd(std::string cmd, uint64_t cmd_seq, uint64_t param, std::string data) {
-		int size = getSizeWithData(CMPLX_STRUCT, data.size());
-		struct cmplx_cmd *ret = (struct cmplx_cmd*)malloc(size);
-		strcpy(ret->cmd, cmd.c_str());
-		ret->cmd_seq = htobe64(cmd_seq);
-		ret->param = htobe64(param);
-		if (data.size() != 0) 
-			strcpy(ret->data, data.c_str());
-		return ret;
-	}
-
-	struct simpl_cmd *generateSimplCmd(std::string cmd, uint64_t cmd_seq, std::string data) {
-		int size = getSizeWithData(SIMPL_STRUCT, data.size());
-		struct simpl_cmd *ret = (struct simpl_cmd*)malloc(size);
-		strcpy(ret->cmd, cmd.c_str());
-		ret->cmd_seq = htobe64(cmd_seq);
-		if (data.size() != 0) 
-			strcpy(ret->data, data.c_str());
-		return ret;
-	}
-
-	void sendCmd(const char *buffer, ssize_t length, struct sockaddr_in Sender_addr) {
-		socklen_t slen = sizeof(struct sockaddr);
-	    if (sendto(udpSock, (const char*)buffer, length, 0, (struct sockaddr *)&Sender_addr, slen) != length) 
-	    	syserr("sendto");
-	}
-
 	void receiveHello(struct simpl_cmd *dg, struct sockaddr_in Sender_addr) {
-		struct cmplx_cmd *buffer = generateCmplxCmd("GOOD DAY", dg->cmd_seq, fm->free_space, mcast_addr);
-		ssize_t length = getSizeWithData(CMPLX_STRUCT, mcast_addr.size());
-		std::cout << "hello " << length << " " << sizeof(struct cmplx_cmd) << std::endl;
-	    sendCmd((const char *)buffer, length, Sender_addr);
+		std::string data(dg->data);
+		if (data.size() != 0) {
+			std::string ip = nm->getIpFromAddress(Sender_addr);
+			std::cout << "[PCKG ERROR]  Skipping invalid package from " << ip << ":" << Sender_addr.sin_port << std::endl;
+			return;
+		}
+		struct cmplx_cmd *buffer = nm->generateCmplxCmd("GOOD_DAY", dg->cmd_seq, fm->free_space, mcast_addr);
+		ssize_t length = nm->getSizeWithData(CMPLX_STRUCT, mcast_addr.size());
+		std::cout << "hello " << length << " " << sizeof(struct cmplx_cmd) << " " << mcast_addr.size() << std::endl;
+	    nm->sendCmd((const char *)buffer, length, Sender_addr);
 	    delete dg;
 	    delete buffer;
 	}
@@ -259,9 +205,9 @@ public:
 		for (auto file : fm->files) {
 			if (file.find(toFind) != std::string::npos) {
 				if (fileList.size() + file.size() + 1 > MAX_UDP_SIZE - 20) {
-					buffer = generateSimplCmd("MY_LIST", dg->cmd_seq, fileList);
-					ssize_t length = getSizeWithData(SIMPL_STRUCT, fileList.size());
-					sendCmd((const char*)buffer, length, Sender_addr);
+					buffer = nm->generateSimplCmd("MY_LIST", dg->cmd_seq, fileList);
+					ssize_t length = nm->getSizeWithData(SIMPL_STRUCT, fileList.size());
+					nm->sendCmd((const char*)buffer, length, Sender_addr);
 				    delete buffer;
 				    fileList = "";
 				}
@@ -273,9 +219,13 @@ public:
 		}
 
 		if (fileList.size() != 0) {
-			buffer = generateSimplCmd("MY_LIST", dg->cmd_seq, fileList);
-			ssize_t length = getSizeWithData(SIMPL_STRUCT, fileList.size());
-			sendCmd((const char*)buffer, length, Sender_addr);
+			buffer = nm->generateSimplCmd("MY_LIST", dg->cmd_seq, fileList);
+			std::cout << "WYSYŁAM " << fileList << std::endl;
+			std::string ip = nm->getIpFromAddress(Sender_addr);
+			std::cout << "IP :: " << ip << std::endl;
+			ssize_t length = nm->getSizeWithData(SIMPL_STRUCT, fileList.size());
+			std::cout << "wysłany pakiet ma " << length << std::endl;
+			nm->sendCmd((const char*)buffer, length, Sender_addr);
 			delete buffer;
 		}
 		delete dg;
@@ -289,8 +239,9 @@ public:
 };
 
 int main(int argc, const char *argv[]) {
+	std::signal(SIGINT, interrupted);
 	Server server(argc, argv);
-	int sock = server.udpSock;
+	int sock = server.nm->udpSock;
 	buffer = (char*)malloc(MAX_UDP_SIZE);
 	while (true) {
 		struct sockaddr_in Sender_addr;
@@ -308,4 +259,5 @@ int main(int argc, const char *argv[]) {
 
 		server.handleCmd(cmd, Sender_addr, len);
 	}
+	delete buffer;
 }

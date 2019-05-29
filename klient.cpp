@@ -8,6 +8,7 @@
 #include <unordered_set>
 #include <time.h>
 
+#include "network-manager.h"
 #include "cmd.h"
 extern "C" {
 	#include "err.h"
@@ -15,10 +16,6 @@ extern "C" {
 
 namespace po = boost::program_options;
 
-#define MAX_UDP_SIZE 	512000
-#define CMD_SIZE 		10
-#define SIMPL_STRUCT 	0
-#define CMPLX_STRUCT 	1
 #define TTL_VALUE		4
 
 class Client {
@@ -31,6 +28,8 @@ public:
 	std::unordered_set<std::string> fetch_files;
 	std::set<unsigned int> activeCmdSeq;
 	struct sockaddr_in remote_address;
+	std::vector<std::pair<std::string, std::string>> serversFiles;
+	NetworkManager *nm;
 
 public: 
 	Client(int argc, const char *argv[]) : cmd_seq(0) {
@@ -77,6 +76,8 @@ public:
 	            syserr("TIMEOUT must have positive value.");
 	        if (timeout > 300)
 	            syserr("TIMEOUT max value is 300.");
+	        nm = new NetworkManager(getUDPSock());
+
 		} catch (const po::error &e) {
 			syserr(e.what());
 		}
@@ -112,91 +113,92 @@ public:
 		return udpSock;
 	}
 
-	struct simpl_cmd *generateSimplCmd(std::string cmd, uint64_t cmd_seq, std::string data) {
-		std::cout << "seq " << cmd_seq << std::endl;
-		int size = getSizeWithData(SIMPL_STRUCT, data.size());
-		struct simpl_cmd *ret = (struct simpl_cmd*)malloc(size);
-		strcpy(ret->cmd, cmd.c_str());
-		ret->cmd_seq = htobe64(cmd_seq);
-		if (data.size() != 0) 
-			strcpy(ret->data, data.c_str());
-		return ret;
-	}
-
-	int getSizeWithData(int type, int len) {
-		int size = (type == SIMPL_STRUCT ? sizeof(struct simpl_cmd) : sizeof(struct cmplx_cmd));
-		if (len == 0)
-			return size;
-		size += len + 1;
-		return size;
-	}
-
 	void discover() {
-		int udpSock = getUDPSock();
 		std::cout << "discover" << std::endl;
-		struct simpl_cmd *buffer = generateSimplCmd("HELLO", getCmdSeq(), "");
+		struct simpl_cmd *buffer = nm->generateSimplCmd("HELLO", getCmdSeq(), "");
 		uint64_t orgCmdSeq = buffer->cmd_seq;
-		std::cout << "SEND HELLO " << getSizeWithData(SIMPL_STRUCT, 0) << " " << sizeof(buffer) << std::endl;
-		int length = getSizeWithData(SIMPL_STRUCT, 0);
-		socklen_t slen = sizeof(struct sockaddr);
-		if (sendto(udpSock, (const char*)buffer, length, 0, (struct sockaddr *)&remote_address, slen) != length) {
-			syserr("sendto");
-		}		
+		std::cout << "SEND HELLO " << nm->getSizeWithData(SIMPL_STRUCT, 0) << " " << sizeof(buffer) << std::endl;
+		int length = nm->getSizeWithData(SIMPL_STRUCT, 0);
+		nm->sendCmd((const char*)buffer, length, remote_address);
 		delete buffer;
 
-		char *buff = (char*)malloc(sizeof(struct cmplx_cmd) + INET_ADDRSTRLEN);
+		char *buff = (char*)malloc(sizeof(struct cmplx_cmd) + INET_ADDRSTRLEN + 1);
 		while (true) {
 			struct sockaddr_in Sender_addr;
-			slen = sizeof(struct sockaddr);
-			ssize_t rcv_len = recvfrom(udpSock, buff, sizeof(struct cmplx_cmd) + 16, 0, (struct sockaddr *)&Sender_addr, &slen);
+			socklen_t slen = sizeof(struct sockaddr);
+			ssize_t rcv_len = recvfrom(nm->udpSock, buff, sizeof(struct cmplx_cmd) + INET_ADDRSTRLEN, 0, (struct sockaddr *)&Sender_addr, &slen);
+			std::cout << "tu 0 " << rcv_len - sizeof(struct cmplx_cmd) << std::endl;
+			std::cout << "Odebraem " << rcv_len << std::endl;
 	        if (rcv_len < 0) {
 	        	break;
 	        } else {
+	        	buff[rcv_len] = 0;
 				struct cmplx_cmd *recvbuff = (struct cmplx_cmd*)buff;
 				assert(orgCmdSeq == recvbuff->cmd_seq);
 				char ip[INET_ADDRSTRLEN];
+				// dodaj handlowanie błędami
 				if (inet_ntop(AF_INET, &(Sender_addr.sin_addr), ip, INET_ADDRSTRLEN) == 0)
 					syserr("inet_ntop 162");
 				std::cout << recvbuff->cmd << " Found " << ip << " (" << recvbuff->data << ") with free space " << be64toh(recvbuff->param) << std::endl;
 	        }
 	    }
 	    delete buff;
-	    close(udpSock);
 	}
 
 	void fetch(std::string s) {
-		std::cout << "fetch" << std::endl;
+		// if (s.size() == 0 || s.size() == 1)
+		// 	return;
+		// if (s[0] == ' ')
+		// 	s.erase(0, 1);
+		// std::cout << "fetch" << std::endl;
+
+		// int found = -1;
+		// for (int i = 0; i < (int)serversFiles.size(); ++i) {
+		// 	if (serversFiles[i].first == s) 
+		// 		found = i;
+		// }
+		// if (found == -1) {
+		// 	std::cout << "File not found in last search." << std::endl;
+		// 	return;
+		// }
+
+		// struct simpl_cmd *buffer = nm->generateSimplCmd("GET", getCmdSeq(), serversFiles[found].first);
+		// int length = nm->getSizeWithData(SIMPL_STRUCT, s.size());
+		// std::cout << "size " << length << std::endl;
+		// socklen_t slen = sizeof(struct sockaddr);
+
+		// if (sendto(sock, (const char*)buffer, length, 0, (struct sockaddr *)&remote_address, slen) != length) {
+		// 	syserr("sendto");
+		// }
+		// delete buffer;
 	}
 
 	void search(std::string s) {
+		serversFiles.clear();
 		if (s.size() > 0 && s[0] == ' ')
 			s.erase(0, 1);
 		std::cout << "search " << s << ";" << std::endl;
-		int udpSock = getUDPSock();
-		struct simpl_cmd *buffer = generateSimplCmd("LIST", getCmdSeq(), s);
+		struct simpl_cmd *buffer = nm->generateSimplCmd("LIST", getCmdSeq(), s);
 		uint64_t orgCmdSeq = buffer->cmd_seq;
-		int length = getSizeWithData(SIMPL_STRUCT, s.size());
+		int length = nm->getSizeWithData(SIMPL_STRUCT, s.size());
 		std::cout << "size " << length << std::endl;
-		socklen_t slen = sizeof(struct sockaddr);
-		if (sendto(udpSock, (const char*)buffer, length, 0, (struct sockaddr *)&remote_address, slen) != length) {
-			syserr("sendto");
-		}
+		nm->sendCmd((const char*)buffer, length, remote_address);
 		delete buffer;
 
 		char *buff = (char*)malloc(MAX_UDP_SIZE);
 		while (true) {
 			struct sockaddr_in Sender_addr;
-			slen = sizeof(struct sockaddr);
-			ssize_t rcv_len = recvfrom(udpSock, buff, MAX_UDP_SIZE, 0, (struct sockaddr *)&Sender_addr, &slen);
+			socklen_t slen = sizeof(struct sockaddr);
+			ssize_t rcv_len = recvfrom(nm->udpSock, buff, MAX_UDP_SIZE, 0, (struct sockaddr *)&Sender_addr, &slen);
 	        if (rcv_len < 0) {
 	        	break;
 	        } else {
+				buff[rcv_len] = 0;
 	        	struct simpl_cmd *recvbuff = (struct simpl_cmd*)buff;
 	        	std::cout << recvbuff->cmd << " " << be64toh(recvbuff->cmd_seq) << std::endl;
 	        	assert(recvbuff->cmd_seq == orgCmdSeq);
-	        	char ip[INET_ADDRSTRLEN];
-				if (inet_ntop(AF_INET, &(Sender_addr.sin_addr), ip, INET_ADDRSTRLEN) == 0)
-					syserr("inet_ntop 197");
+				std::string ip = nm->getIpFromAddress(Sender_addr);
+				std::string file = "";
 				for (int i = 0; i < MAX_UDP_SIZE; ++i) {
 					if (recvbuff->data[i] == 0) 
 						break;
@@ -205,6 +207,8 @@ public:
 					else {
 						std::cout << recvbuff->data[i];
 						if (recvbuff->data[i + 1] == 0) {
+							file = "";
+							serversFiles.push_back({file, std::string(ip)});
 							std::cout << " (" << ip << ")" << std::endl;
 							break;
 						}
@@ -212,7 +216,6 @@ public:
 				}
 	        }
 		}
-		close(udpSock);
 	}
 
 	void upload(std::string s) {
@@ -226,14 +229,9 @@ public:
 		if (s[0] == ' ')
 			s.erase(0, 1);
 
-		int udpSock = getUDPSock();
-		struct simpl_cmd *buffer = generateSimplCmd("DEL", 0, s);
-		int length = getSizeWithData(SIMPL_STRUCT, s.size());
-		socklen_t slen = sizeof(struct sockaddr);
-		if (sendto(udpSock, (const char*)buffer, length, 0, (struct sockaddr *)&remote_address, slen) != length) {
-			syserr("sendto");
-		}
-		close(udpSock);
+		struct simpl_cmd *buffer = nm->generateSimplCmd("DEL", 0, s);
+		int length = nm->getSizeWithData(SIMPL_STRUCT, s.size());
+		nm->sendCmd((const char*)buffer, length, remote_address);
 		delete buffer;
 	}
 
