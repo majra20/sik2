@@ -43,6 +43,16 @@ public:
         }
         std::cout << free_space << std::endl;
     }
+
+    void removeFile(std::string s) {
+    	for (const auto &entry : fs::directory_iterator(path)) {
+    		if (fs::is_regular_file(entry.path()) && entry.path().filename() == s) {
+    			free_space += fs::file_size(entry.path());
+    			files.erase(entry.path().filename());
+    			fs::remove(entry.path());
+    		}
+    	}
+    }
 };
 
 char *buffer;
@@ -186,10 +196,15 @@ public:
 			return;
 		}
 		struct simpl_cmd *dg = getSimplCmd(len);
+		for (int i = 0; i < len; ++i)
+			buffer[i] = 0;
 		if (cmd == "HELLO")
 			receiveHello(dg, Sender_addr);
-		else
+		else if (cmd == "LIST")
 			receiveList(dg, Sender_addr);
+		else if (cmd == "DEL") {
+			receiveDel(dg);
+		}
 		return;
 	}
 
@@ -233,6 +248,7 @@ public:
 		ssize_t length = getSizeWithData(CMPLX_STRUCT, mcast_addr.size());
 		std::cout << "hello " << length << " " << sizeof(struct cmplx_cmd) << std::endl;
 	    sendCmd((const char *)buffer, length, Sender_addr);
+	    delete dg;
 	    delete buffer;
 	}
 
@@ -249,7 +265,10 @@ public:
 				    delete buffer;
 				    fileList = "";
 				}
-				fileList += file + '\n';
+				if (fileList.size() == 0)
+					fileList = file;
+				else
+					fileList += '\n' + file;
 			}
 		}
 
@@ -259,6 +278,13 @@ public:
 			sendCmd((const char*)buffer, length, Sender_addr);
 			delete buffer;
 		}
+		delete dg;
+	}
+
+	void receiveDel(struct simpl_cmd *dg) {
+		std::cout << dg->cmd << " " << dg->data << std::endl;
+		std::string file(dg->data);
+		fm->removeFile(file);
 	}
 };
 

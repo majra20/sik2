@@ -161,6 +161,7 @@ public:
 	        }
 	    }
 	    delete buff;
+	    close(udpSock);
 	}
 
 	void fetch(std::string s) {
@@ -191,20 +192,27 @@ public:
 	        	break;
 	        } else {
 	        	struct simpl_cmd *recvbuff = (struct simpl_cmd*)buff;
+	        	std::cout << recvbuff->cmd << " " << be64toh(recvbuff->cmd_seq) << std::endl;
 	        	assert(recvbuff->cmd_seq == orgCmdSeq);
 	        	char ip[INET_ADDRSTRLEN];
 				if (inet_ntop(AF_INET, &(Sender_addr.sin_addr), ip, INET_ADDRSTRLEN) == 0)
 					syserr("inet_ntop 197");
 				for (int i = 0; i < MAX_UDP_SIZE; ++i) {
-					if (recvbuff->data[i] == 0)
+					if (recvbuff->data[i] == 0) 
 						break;
 					if (recvbuff->data[i] == '\n') 
-						std::cout << " " << ip << std::endl;
-					else
+						std::cout << " (" << ip << ")" << std::endl;
+					else {
 						std::cout << recvbuff->data[i];
+						if (recvbuff->data[i + 1] == 0) {
+							std::cout << " (" << ip << ")" << std::endl;
+							break;
+						}
+					}
 				}
 	        }
 		}
+		close(udpSock);
 	}
 
 	void upload(std::string s) {
@@ -213,6 +221,20 @@ public:
 
 	void remove(std::string s) {
 		std::cout << "remove" << std::endl;
+		if (s.size() == 0 || s.size() == 1)
+			return;
+		if (s[0] == ' ')
+			s.erase(0, 1);
+
+		int udpSock = getUDPSock();
+		struct simpl_cmd *buffer = generateSimplCmd("DEL", 0, s);
+		int length = getSizeWithData(SIMPL_STRUCT, s.size());
+		socklen_t slen = sizeof(struct sockaddr);
+		if (sendto(udpSock, (const char*)buffer, length, 0, (struct sockaddr *)&remote_address, slen) != length) {
+			syserr("sendto");
+		}
+		close(udpSock);
+		delete buffer;
 	}
 
 private:
@@ -259,6 +281,7 @@ int main(int argc, const char *argv[]) {
                     client.upload(command.substr(6));
                     continue;
                 }
+
                 if (remove_str == command_substr) {
                     client.remove(command.substr(6));
                 }
