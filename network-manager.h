@@ -106,12 +106,22 @@ public:
 	  		buf[actPos++] = fgetc(file);
 	  		if (actPos + 1 == FILE_PACKET_SIZE) {
 	  			int len = sizeof(buf);
-			  	if (write(sock, buf, len) != len)
-			  		syserr("partial / failed write");
+			  	if (write(sock, buf, len) != len) {
+			  		// if (errno == 0) {
+		  			std::cout << "Błąd podczas wysyłania pliku. Timeout." << std::endl;
+		  			break;
+			  		// }
+			  		// syserr("partial / failed write");
+			  	}
 			  	actPos = 0;
 	  		} else if (i + (uint32_t)1 == sendLen) {
-			  	if (write(sock, buf, sizeof(char) * actPos) != (ssize_t)(sizeof(char) * actPos))
-			  		syserr("partial / failed write");
+			  	if (write(sock, buf, sizeof(char) * actPos) != (ssize_t)(sizeof(char) * actPos)) {
+			  		// if (errno == 0) {
+		  			std::cout << "Błąd podczas wysyłania pliku. Timeout." << std::endl;
+		  			break;
+			  		// }
+			  		// syserr("partial / failed write");
+			  	}
 	  		}
 	  	}
 	  	fclose(file);
@@ -123,8 +133,13 @@ public:
 		do {
 			ssize_t remains = sizeToRecv - prevLen; // number of bytes to be read
 			len = read(sock, ((char*)fileContent) + prevLen, remains);
-			if (len < 0)
-				syserr("reading from client socket");
+			if (len < 0) {
+				// if (errno == 0) {
+	  			std::cout << "Błąd podczas odbierania pliku. Timeout." << std::endl;
+	  			break; 
+		  		// }
+				// syserr("reading from client socket");
+			}
 			else if (len > 0) {
 				prevLen += len;
 				if ((ssize_t)prevLen == sizeToRecv) {
@@ -142,12 +157,17 @@ public:
 
 		char fileContent[FILE_PACKET_SIZE];
 		ssize_t len;
+		std::cout << "zaczynam odbieranie "<< std::endl;
 		while (true) {
 			len = read(sock, (char*)fileContent, FILE_PACKET_SIZE);
+			std::cout << "odebralem " << len << std::endl;
 			if (len == 0)
 				break;
-			if (len < 0)
+			if (len < 0) {
+				std::cout << "Błąd podczas odbierania pliku. Timeout." << std::endl;
+	  			break;
 				syserr("reading from socket");
+			}
 			for (int i = 0; i < len; ++i) {
 				fputc(fileContent[i], file);
 				fileContent[i] = 0;

@@ -114,7 +114,8 @@ public:
 		return udpSock;
 	}
 
-	void discover() {
+	std::vector<std::pair<std::string, uint64_t>> discover() {
+		std::vector<std::pair<std::string, uint64_t>> ret;
 		std::cout << "discover" << std::endl;
 		struct simpl_cmd *buffer = nm->generateSimplCmd("HELLO", getCmdSeq(), "");
 		uint64_t orgCmdSeq = buffer->cmd_seq;
@@ -138,8 +139,11 @@ public:
 				// dodaj handlowanie błędami
 				std::string ip = nm->getIpFromAddress(Sender_addr);
 				std::cout << recvbuff->cmd << " Found " << ip << " (" << recvbuff->data << ") with free space " << be64toh(recvbuff->param) << std::endl;
+				ret.push_back({ip, be64toh(recvbuff->param)});
 	        }
 	    }
+
+	    return ret;
 	    delete buff;
 	}
 
@@ -163,8 +167,14 @@ public:
 
 		struct simpl_cmd *buffer = nm->generateSimplCmd("GET", getCmdSeq(), serversFiles[found].first);
 		uint64_t orgCmdSeq = buffer->cmd_seq;
+
 		int length = nm->getSizeWithData(SIMPL_STRUCT, s.size());
-		nm->sendCmd((const char*)buffer, length, remote_address);
+		struct sockaddr_in address;
+		address.sin_family = AF_INET;
+		address.sin_port = htons(cmd_port);
+		if (inet_aton(serversFiles[found].second.c_str(), &address.sin_addr) == 0)
+		    syserr("inet_aton");
+		nm->sendCmd((const char*)buffer, length, address);
 		delete buffer;
 
 		char *buff = (char*)malloc(MAX_UDP_SIZE);
@@ -203,6 +213,13 @@ public:
 		int sock = socket(addr_result->ai_family, addr_result->ai_socktype, addr_result->ai_protocol);
 		if (sock < 0)
 		    syserr("socket");
+		struct timeval t;
+	    t.tv_sec = timeout;
+	    t.tv_usec = 0;
+		if (setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO,(struct timeval *)&t,sizeof(struct timeval)) < 0) 
+			syserr("setsockopt");
+		if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,(struct timeval *)&t,sizeof(struct timeval)) < 0) 
+			syserr("setsockopt");
 		if (connect(sock, addr_result->ai_addr, addr_result->ai_addrlen) < 0)
 		    syserr("connect tu problem");
 		freeaddrinfo(addr_result);
@@ -247,16 +264,18 @@ public:
 				for (int i = 0; i < MAX_UDP_SIZE; ++i) {
 					if (recvbuff->data[i] == 0) 
 						break;
-					if (recvbuff->data[i] == '\n') 
+					if (recvbuff->data[i] == '\n') {
+						serversFiles.push_back({file, std::string(ip)});
 						std::cout << " (" << ip << ")" << std::endl;
+						file = "";
+					}
 					else {
 						file += recvbuff->data[i];
 						std::cout << recvbuff->data[i];
 						if (recvbuff->data[i + 1] == 0) {
-							std::cout << "wrzucam " << file << std::endl;
 							serversFiles.push_back({file, std::string(ip)});
 							file = "";
-							// std::cout << " (" << ip << ")" << std::endl;
+							std::cout << " (" << ip << ")" << std::endl;
 							break;
 						}
 					}

@@ -220,6 +220,7 @@ public:
 		}
 		if (found == false) {
 			// log it TODO
+			return;
 		}
 		uint64_t port;
 		int sock = getTcpSock(&port);
@@ -228,7 +229,8 @@ public:
 		std::string path = getPathToFile(toGet);
 		nm->sendCmd((const char*)buffer, length, Sender_addr);
 
-		sendFileTcp(sock, path);
+		std::thread t1(&Server::sendFileTcp, this, sock, path);
+		t1.join();
 
 	}
 
@@ -252,6 +254,7 @@ public:
 	
 		nm->sendFile(msgSock, path);
 		close(msgSock);
+		close(sock);
 		std::cout << "wyslalem" << std::endl;
 	}
 
@@ -260,6 +263,13 @@ public:
 		if (sock < 0)
 			syserr("socket");
 
+		struct timeval t;
+	    t.tv_sec = timeout;
+	    t.tv_usec = 0;
+		if (setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO,(struct timeval *)&t,sizeof(struct timeval)) < 0) 
+			syserr("setsockopt");
+		if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,(struct timeval *)&t,sizeof(struct timeval)) < 0) 
+			syserr("setsockopt");
 		struct sockaddr_in server_address;
 		server_address.sin_family = AF_INET;
 		server_address.sin_addr.s_addr = htonl(INADDR_ANY);
