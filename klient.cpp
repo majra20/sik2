@@ -28,6 +28,7 @@ public:
 	struct sockaddr_in remote_address;
 	std::vector<std::pair<std::string, std::string>> serversFiles;
 	NetworkManager *nm;
+	FileManager *fm;
 
 public: 
 	Client(int argc, const char *argv[]) : cmd_seq(0) {
@@ -75,7 +76,7 @@ public:
 	        if (timeout > 300)
 	            syserr("TIMEOUT max value is 300.");
 	        nm = new NetworkManager(getUDPSock());
-
+	        fm = new FileManager(0, out_fldr);
 		} catch (const po::error &e) {
 			syserr(e.what());
 		}
@@ -83,6 +84,8 @@ public:
 
 	~Client() {
 		delete[] mcast_addr;
+		delete nm;
+		delete fm;
 	}
 
 	int getUDPSock() {
@@ -180,7 +183,7 @@ public:
 			std::cout << be64toh(recvbuff->cmd_seq) << " " << recvbuff->cmd << " " << be64toh(recvbuff->param) << " " << recvbuff->data << std::endl;
 		}
 
-		getFile(serversFiles[found].second, be64toh(recvbuff->param), Sender_addr, s);
+		getFile(serversFiles[found].second, be64toh(recvbuff->param), s);
 		delete buff;
 	}
 
@@ -191,6 +194,7 @@ public:
 		addr_hints.ai_family = AF_INET;
 		addr_hints.ai_socktype = SOCK_STREAM;
 		addr_hints.ai_protocol = IPPROTO_TCP;
+		std::cout << "otwieram " << host << " " << port << std::endl;
 		int err = getaddrinfo(host.c_str(), std::to_string(port).c_str(), &addr_hints, &addr_result);
 		if (err == EAI_SYSTEM)
 			syserr("getaddrinfo: %s", gai_strerror(err));
@@ -200,15 +204,17 @@ public:
 		if (sock < 0)
 		    syserr("socket");
 		if (connect(sock, addr_result->ai_addr, addr_result->ai_addrlen) < 0)
-		    syserr("connect");
+		    syserr("connect tu problem");
 		freeaddrinfo(addr_result);
 
 		return sock;
 	}
 
-	void getFile(std::string host, uint64_t port, struct sockaddr_in Sender_addr, std::string file) {
+	void getFile(std::string host, uint64_t port, std::string file) {
 		int sock = getTcpOnPort(host, port);
-
+		nm->receiveFile(sock, out_fldr + "/" + file);
+		std::cout << "Odebralem plik " << out_fldr + "/" + file << std::endl;
+		close(sock);
 	}
 
 	void search(std::string s) {
@@ -247,10 +253,10 @@ public:
 						file += recvbuff->data[i];
 						std::cout << recvbuff->data[i];
 						if (recvbuff->data[i + 1] == 0) {
-							// std::cout << "wrzucam " << file << std::endl;
+							std::cout << "wrzucam " << file << std::endl;
 							serversFiles.push_back({file, std::string(ip)});
 							file = "";
-							std::cout << " (" << ip << ")" << std::endl;
+							// std::cout << " (" << ip << ")" << std::endl;
 							break;
 						}
 					}

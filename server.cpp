@@ -6,7 +6,6 @@
 #include <sys/socket.h>
 #include <string>
 #include <unordered_set>
-#include <experimental/filesystem>
 #include <time.h>
 #include <thread>
 #include <csignal>
@@ -19,44 +18,8 @@
 #include "network-manager.h"
 
 namespace po = boost::program_options;
-namespace fs = std::experimental::filesystem;
+
 #define QUEUE_LENGTH     5
-
-class FileManager {
-public:
-	uint64_t free_space;
-	uint64_t max_space;
-	std::string path;
-    std::unordered_set<std::string> files;
-    std::map<std::string, bool> isBusy;
-
-    FileManager(unsigned int set_max_space, std::string set_path) 
-    	: free_space(set_max_space), max_space(set_max_space), path(set_path) {
-    	for (const auto & entry : fs::directory_iterator(path)) {
-            if (fs::is_regular_file(entry.path())) {
-                files.insert(entry.path().filename());
-                isBusy[entry.path().filename()] = false;
-                std::cout << entry.path().filename() << std::endl;
-                unsigned int k = fs::file_size(entry.path());
-                if (k > free_space)
-                    free_space = 0;
-                else
-                    free_space -= k;
-            }
-        }
-        std::cout << free_space << std::endl;
-    }
-
-    void removeFile(std::string s) {
-    	for (const auto &entry : fs::directory_iterator(path)) {
-    		if (fs::is_regular_file(entry.path()) && entry.path().filename() == s) {
-    			free_space += fs::file_size(entry.path());
-    			files.erase(entry.path().filename());
-    			fs::remove(entry.path());
-    		}
-    	}
-    }
-};
 
 void interrupted(int signal) {
 	std::cout << "Ktoś mi wykurwił bombe" << std::endl;
@@ -281,18 +244,15 @@ public:
 	}
 
 	void sendFileTcp(int sock, std::string path) {
-		if (unlink(path.c_str()) < 0)
-			syserr("unlink");
-		int fromfd;
-		if ((fromfd = open(path.c_str(), O_RDONLY)) < 0)
-			syserr("open");
+		std::cout << "Send file " << std::endl;
 
-		int rv;
-		if ((rv = sendfile(sock, fromfd, NULL, 1000000000)) < 0)
-			syserr("sendfile");
-
-		close(fromfd);
-		close(sock);
+		socklen_t clientAddressLen;
+		struct sockaddr_in clientAddress;
+		int msgSock = accept(sock, (struct sockaddr*)&clientAddress, &clientAddressLen);
+	
+		nm->sendFile(msgSock, path);
+		close(msgSock);
+		std::cout << "wyslalem" << std::endl;
 	}
 
 	int getTcpSock(uint64_t *port) {
@@ -311,8 +271,8 @@ public:
 		socklen_t len = sizeof(server_address);
 		if (getsockname(sock, (struct sockaddr*)&server_address, &len) < 0)
 			syserr("getsockname");
-		std::cout << "Otworzony tcp socket na porcie " << ntohs(len) << std::endl;
-		*port = (uint64_t)ntohs(len);
+		std::cout << "Otworzony tcp socket na porcie " << ntohs(server_address.sin_port) << std::endl;
+		*port = (uint64_t)ntohs(server_address.sin_port);
 		return sock;
 	}
 };

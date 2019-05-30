@@ -1,6 +1,6 @@
 TARGET: netstore-server netstore-client
 
-GCCFLAGS = -std=c++17 -Wall -Wextra -O2
+GCCFLAGS = -std=c++17 -Wall -Wextra -g
 LFLAGS = -lboost_program_options -lstdc++fs -pthread
 
 err.o: err.h err.c
