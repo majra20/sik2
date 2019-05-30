@@ -10,12 +10,17 @@
 #include <time.h>
 #include <thread>
 #include <csignal>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <sys/sendfile.h>
+
 
 #include "cmd.h"
 #include "network-manager.h"
 
 namespace po = boost::program_options;
 namespace fs = std::experimental::filesystem;
+#define QUEUE_LENGTH     5
 
 class FileManager {
 public:
@@ -23,12 +28,14 @@ public:
 	uint64_t max_space;
 	std::string path;
     std::unordered_set<std::string> files;
+    std::map<std::string, bool> isBusy;
 
     FileManager(unsigned int set_max_space, std::string set_path) 
     	: free_space(set_max_space), max_space(set_max_space), path(set_path) {
     	for (const auto & entry : fs::directory_iterator(path)) {
             if (fs::is_regular_file(entry.path())) {
                 files.insert(entry.path().filename());
+                isBusy[entry.path().filename()] = false;
                 std::cout << entry.path().filename() << std::endl;
                 unsigned int k = fs::file_size(entry.path());
                 if (k > free_space)
@@ -59,7 +66,7 @@ void interrupted(int signal) {
 char *buffer;
 class Server {
 public:
-	std::vector<std::string> simpl = {"HELLO", "LIST", "DEL"};
+	std::vector<std::string> simpl = {"HELLO", "LIST", "DEL", "GET"};
 	std::string mcast_addr;
 	in_port_t cmd_port;
 	unsigned int timeout;
@@ -177,9 +184,10 @@ public:
 			receiveHello(dg, Sender_addr);
 		else if (cmd == "LIST")
 			receiveList(dg, Sender_addr);
-		else if (cmd == "DEL") {
+		else if (cmd == "DEL")
 			receiveDel(dg);
-		}
+		else if (cmd == "GET")
+			receiveGet(dg, Sender_addr); 
 		return;
 	}
 
@@ -236,6 +244,77 @@ public:
 		std::string file(dg->data);
 		fm->removeFile(file);
 	}
+
+	void receiveGet(struct simpl_cmd *dg, struct sockaddr_in Sender_addr) {
+		std::cout << dg->cmd << " " << dg->data << std::endl;
+		bool found = false;
+		std::string toGet(dg->data);
+		for (auto i : fm->files) {
+			if (toGet == i) {
+				fm->isBusy[toGet] = true;
+				found = true;
+			}
+		}
+		if (found == false) {
+			// log it TODO
+		}
+		uint64_t port;
+		int sock = getTcpSock(&port);
+		struct cmplx_cmd *buffer = nm->generateCmplxCmd("CONNECT_ME", dg->cmd_seq, port, toGet);
+		ssize_t length = nm->getSizeWithData(CMPLX_STRUCT, toGet.size());
+		std::string path = getPathToFile(toGet);
+		nm->sendCmd((const char*)buffer, length, Sender_addr);
+
+		sendFileTcp(sock, path);
+
+	}
+
+	std::string getPathToFile(std::string file) {
+		for (const auto & entry : fs::directory_iterator(fm->path)) {
+            if (fs::is_regular_file(entry.path()) && file == entry.path().filename()) {
+                std::cout << entry.path() << std::endl;
+                return entry.path();
+            }
+        }
+
+        return "";
+	}
+
+	void sendFileTcp(int sock, std::string path) {
+		if (unlink(path.c_str()) < 0)
+			syserr("unlink");
+		int fromfd;
+		if ((fromfd = open(path.c_str(), O_RDONLY)) < 0)
+			syserr("open");
+
+		int rv;
+		if ((rv = sendfile(sock, fromfd, NULL, 1000000000)) < 0)
+			syserr("sendfile");
+
+		close(fromfd);
+		close(sock);
+	}
+
+	int getTcpSock(uint64_t *port) {
+		int sock = socket(PF_INET, SOCK_STREAM, 0);
+		if (sock < 0)
+			syserr("socket");
+
+		struct sockaddr_in server_address;
+		server_address.sin_family = AF_INET;
+		server_address.sin_addr.s_addr = htonl(INADDR_ANY);
+		server_address.sin_port = 0;
+		if (bind(sock, (struct sockaddr *)&server_address, sizeof(server_address)) < 0)
+		    syserr("bind");
+		if (listen(sock, QUEUE_LENGTH) < 0)
+		    syserr("listen");
+		socklen_t len = sizeof(server_address);
+		if (getsockname(sock, (struct sockaddr*)&server_address, &len) < 0)
+			syserr("getsockname");
+		std::cout << "Otworzony tcp socket na porcie " << ntohs(len) << std::endl;
+		*port = (uint64_t)ntohs(len);
+		return sock;
+	}
 };
 
 int main(int argc, const char *argv[]) {
@@ -256,7 +335,7 @@ int main(int argc, const char *argv[]) {
 				break;
 			cmd += buffer[i];
 		}
-
+		std::cout << "Dostałem " << cmd << " handling" << std::endl;
 		server.handleCmd(cmd, Sender_addr, len);
 	}
 	delete buffer;

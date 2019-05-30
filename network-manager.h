@@ -71,7 +71,7 @@ public:
 	}
 
 	void sendCmd(const char *buffer, ssize_t length, struct sockaddr_in addr) {
-		std::cout << "Sending cmd " << buffer << " " << length << std::endl;
+		std::cout << "Sending cmd: " << buffer << " : length : " << length << std::endl;
 		socklen_t slen = sizeof(struct sockaddr);
 	    if (sendto(udpSock, (const char*)buffer, length, 0, (struct sockaddr *)&addr, slen) != length) 
 	    	syserr("sendto");
