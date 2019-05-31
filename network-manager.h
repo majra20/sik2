@@ -9,8 +9,11 @@
 #include <time.h>
 #include <thread>
 #include <experimental/filesystem>
+#include <algorithm>
 #include <csignal>
 #include <cstring>
+#include <mutex>
+#include <atomic>
 #include <map>
 
 #include "cmd.h"
@@ -30,6 +33,26 @@ long getFileSize(FILE *file) {
 	fseek(file, 0, SEEK_SET);
 	return size; 
 }
+
+class Logger {
+public:
+	std::mutex m;
+
+	Logger() {}
+
+	void logError(std::string ip, uint64_t port, std::string err) {
+		std::lock_guard<std::mutex> lg(m);
+		std::cout << "[PCKG ERROR] Skipping invalid package from " << ip << ":" 
+			<< port << ". " << err << std::endl;
+
+		return;
+	}
+
+	void log(std::string s) {
+		std::lock_guard<std::mutex> lg(m);
+		std::cout << s << std::endl;
+	}
+};
 
 class NetworkManager {
 public:
@@ -54,6 +77,19 @@ public:
 		ret->data[len - sizeof(struct simpl_cmd)] = 0;
 		ret->cmd_seq = be64toh(ret->cmd_seq);
 		std::cout << ret->cmd << " " << ret->cmd_seq << " " << ret->data << std::endl;
+		return ret;
+	}
+
+	struct cmplx_cmd *getCmplxCmd(char* buffer, int len) {
+		std::cout << "deklaruje size " << len << " " << sizeof(struct cmplx_cmd) << std::endl;
+		struct cmplx_cmd *ret = (struct cmplx_cmd*)malloc(len + 1);
+		memcpy(ret, (struct cmplx_cmd*)buffer, len);
+		for (int i = 0; i < len; ++i)
+			buffer[i] = 0;
+		ret->data[len - sizeof(struct cmplx_cmd)] = 0;
+		ret->cmd_seq = be64toh(ret->cmd_seq);
+		ret->param = be64toh(ret->param);
+		std::cout << ret->cmd << " " << ret->cmd_seq << " " << ret->param << " " << ret->data << std::endl;
 		return ret;
 	}
 
@@ -97,7 +133,7 @@ public:
 		return std::string(ip);
 	}
 
-	void sendFile(int sock, std::string path) {
+	std::string sendFile(int sock, std::string path) {
 		FILE *file = fopen(path.c_str(), "r");
 		long sendLen = getFileSize(file);		
 		char buf[FILE_PACKET_SIZE];
@@ -108,8 +144,8 @@ public:
 	  			int len = sizeof(buf);
 			  	if (write(sock, buf, len) != len) {
 			  		// if (errno == 0) {
-		  			std::cout << "Błąd podczas wysyłania pliku. Timeout." << std::endl;
-		  			break;
+		  			// std::cout << "Błąd podczas wysyłania pliku. Timeout." << std::endl;
+		  			return "Lost connection.";
 			  		// }
 			  		// syserr("partial / failed write");
 			  	}
@@ -117,14 +153,15 @@ public:
 	  		} else if (i + (uint32_t)1 == sendLen) {
 			  	if (write(sock, buf, sizeof(char) * actPos) != (ssize_t)(sizeof(char) * actPos)) {
 			  		// if (errno == 0) {
-		  			std::cout << "Błąd podczas wysyłania pliku. Timeout." << std::endl;
-		  			break;
+		  			// std::cout << "Błąd podczas wysyłania pliku. Timeout." << std::endl;
+		  			return "Lost connection.";
 			  		// }
 			  		// syserr("partial / failed write");
 			  	}
 	  		}
 	  	}
 	  	fclose(file);
+	  	return "";
 	}
 
 	void receivePacket(int sock, char fileContent[], ssize_t sizeToRecv) {
@@ -150,7 +187,7 @@ public:
 		} while (len > 0);
 	}
 
-	void receiveFile(int sock, std::string path) {
+	std::string receiveFile(int sock, std::string path) {
 		FILE *file = fopen(path.c_str(), "r+");
 		if (file == NULL)
 			file = fopen(path.c_str(), "w");
@@ -164,9 +201,8 @@ public:
 			if (len == 0)
 				break;
 			if (len < 0) {
-				std::cout << "Błąd podczas odbierania pliku. Timeout." << std::endl;
-	  			break;
-				syserr("reading from socket");
+				// std::cout << "Błąd podczas odbierania pliku. Timeout." << std::endl;
+				return "Lost connection.";
 			}
 			for (int i = 0; i < len; ++i) {
 				fputc(fileContent[i], file);
@@ -174,12 +210,76 @@ public:
 			}
 		}
 		fclose(file);
+		return "";
+	}
+
+	bool checkSimplCmd(Logger *logger, std::string ip, uint64_t port, struct simpl_cmd *dg, std::string cmd, uint64_t cmd_seq, std::string data) {
+		std::string dgCmd(dg->cmd);
+		if (dgCmd != cmd)
+			return false;
+		printf("2\n");
+		std::cout << dg->cmd_seq << " " << cmd_seq << std::endl;
+		if (dg->cmd_seq != cmd_seq)
+			return false;
+		std::string dgData(dg->data);
+		printf("3\n");
+		if (data == "" && dgData.size() != 0) {
+			printf("12\n");
+			logger->logError(ip, port, "Data should be empty.");
+			return false;
+		}
+		else if (data == "STH" && dgData.size() == 0) {
+			printf("4\n");
+			logger->logError(ip, port, "Data should contain something.");
+			return false;
+		}
+		else if (data != "STH" && data != "" && data != dgData) {
+			printf("5\n");
+			logger->logError(ip, port, "Data have invalid content.");
+			return false;
+		}
+		printf("6\n");
+
+		return true;
+	}
+
+	bool checkCmplxCmd(Logger *logger, std::string ip, uint64_t port, struct cmplx_cmd *dg, std::string cmd, uint64_t cmd_seq, std::string data) {
+		std::string dgCmd = "";
+		for (int i = 0; i < 10; ++i) {
+			if (dg->cmd[i] == 0)
+				break;
+			dgCmd += dg->cmd[i];
+		}
+		if (dgCmd != cmd) {
+			logger->logError(ip, port, "Wrong cmd.");
+			return false;
+		}
+		if (dg->cmd_seq != cmd_seq) {
+			logger->logError(ip, port, "Wrong cmd_seq.");
+			return false;
+		}
+
+		std::string dgData(dg->data);
+		if (data == "" && dgData.size() != 0) {
+			logger->logError(ip, port, "Data should be empty.");
+			return false;
+		}
+		else if (data == "STH" && dgData.size() == 0) {
+			logger->logError(ip, port, "Data should contain something.");
+			return false;
+		}
+		else if (data != "STH" && data != "" && data != dgData) {
+			logger->logError(ip, port, "Data have invalid content.");
+			return false;
+		}
+
+		return true;
 	}
 };
 
 class FileManager {
 public:
-	uint64_t free_space;
+	std::atomic<uint64_t> free_space;
 	uint64_t max_space;
 	std::string path;
     std::unordered_set<std::string> files;
@@ -199,16 +299,42 @@ public:
                     free_space -= k;
             }
         }
+        for (auto a : files)
+        	std::cout << "MAM " << a << std::endl;
         std::cout << free_space << std::endl;
     }
 
     void removeFile(std::string s) {
     	for (const auto &entry : fs::directory_iterator(path)) {
-    		if (fs::is_regular_file(entry.path()) && entry.path().filename() == s) {
+    		if (fs::is_regular_file(entry.path()) && entry.path().filename() == s && !isBusy[s]) {
     			free_space += fs::file_size(entry.path());
     			files.erase(entry.path().filename());
     			fs::remove(entry.path());
     		}
     	}
     }
+
+    void addFile(std::string s) {
+    	files.insert(s);
+    	isBusy[s] = false;
+    }
+
+	std::string getFileName(std::string path) {
+		std::string ret = "";
+		for (int i = (int)path.size() - 1; i >= 0; --i) {
+			if (path[i] == '/')
+				break;
+			ret += path[i];
+		}
+		std::reverse(ret.begin(), ret.end());
+		return ret;
+	}
+
+	bool exists(std::string file) {
+		std::cout << "sprawdzam czy istnieje " << file << std::endl;
+		if (files.find(file) == files.end())
+			return false;
+		std::cout << "nie istnieje" << std::endl;
+		return true;
+	}
 };

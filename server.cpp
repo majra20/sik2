@@ -127,14 +127,15 @@ public:
 
 	void handleCmd(std::string cmd, struct sockaddr_in Sender_addr, int len) {
 		if (cmd == "ADD") {
-			
+			receiveAdd(nm->getCmplxCmd(buffer, len), Sender_addr);
+			return;
 		}
 		bool isOk = false;
 		for (auto s : simpl) {
 			if (cmd == s)
 				isOk = true;
 		}
-		std::cout << "Dostałem taką komende " << cmd << std::endl;
+		std::cout << "Dostałem taką komende2 " << cmd << std::endl;
 		if (!isOk) {
 			std::string ip = nm->getIpFromAddress(Sender_addr);
 			std::cout << "[PCKG ERROR] Skipping invalid package from " << ip << ":" << Sender_addr.sin_port << ". Bad cmd argument." << std::endl;
@@ -151,6 +152,10 @@ public:
 			receiveDel(dg);
 		else if (cmd == "GET")
 			receiveGet(dg, Sender_addr); 
+		else {
+			//log it
+			std::cout << "Zły cmd" << std::endl;
+		}
 		return;
 	}
 
@@ -228,10 +233,39 @@ public:
 		ssize_t length = nm->getSizeWithData(CMPLX_STRUCT, toGet.size());
 		std::string path = getPathToFile(toGet);
 		nm->sendCmd((const char*)buffer, length, Sender_addr);
-
+		delete buffer;
 		std::thread t1(&Server::sendFileTcp, this, sock, path);
 		t1.join();
 
+	}
+
+	void receiveAdd(struct cmplx_cmd *dg, struct sockaddr_in Sender_addr) {
+		// sprawdz poprawność tej komendy
+		std::string file(dg->data);
+		bool isOkName = true;
+		for (auto c : file) {
+			if (c == '/')
+				isOkName = false;
+		}
+		if (!isOkName || file.size() == 0 || fm->free_space < dg->param || fm->exists(dg->data)) {
+			struct simpl_cmd *buffer = nm->generateSimplCmd("NO_WAY", dg->cmd_seq, file);
+			ssize_t length = nm->getSizeWithData(CMPLX_STRUCT, file.size());
+			nm->sendCmd((const char*)buffer, length, Sender_addr);
+			delete buffer;
+			delete dg;
+			return;
+		}
+
+		fm->free_space -= dg->param;
+		uint64_t port;
+		int sock = getTcpSock(&port);
+		struct cmplx_cmd *buff = nm->generateCmplxCmd("CAN_ADD", dg->cmd_seq, port, "");
+		ssize_t length = nm->getSizeWithData(CMPLX_STRUCT, 0);
+		std::string path = fm->path + "/" + file;
+		nm->sendCmd((const char*)buff, length, Sender_addr);
+		delete buff;
+		std::thread t1(&Server::receiveFileTcp, this, sock, path, file, (uint64_t)dg->param);
+		t1.join();
 	}
 
 	std::string getPathToFile(std::string file) {
@@ -253,6 +287,26 @@ public:
 		int msgSock = accept(sock, (struct sockaddr*)&clientAddress, &clientAddressLen);
 	
 		nm->sendFile(msgSock, path);
+
+		fm->isBusy[path] = false;
+		close(msgSock);
+		close(sock);
+		std::cout << "wyslalem" << std::endl;
+	}
+
+	void receiveFileTcp(int sock, std::string path, std::string file, uint64_t size) {
+		std::cout << "Receive file " << path << std::endl;
+
+		socklen_t clientAddressLen;
+		struct sockaddr_in clientAddress;
+		int msgSock = accept(sock, (struct sockaddr*)&clientAddress, &clientAddressLen);
+	
+		if (nm->receiveFile(msgSock, path) == "") {
+			fm->files.insert(file);
+		} else {
+			fm->free_space += size;
+		}
+
 		close(msgSock);
 		close(sock);
 		std::cout << "wyslalem" << std::endl;

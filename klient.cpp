@@ -8,6 +8,7 @@
 #include <string>
 #include <unordered_set>
 #include <time.h>
+#include <thread>
 
 #include "network-manager.h"
 #include "cmd.h"
@@ -15,6 +16,8 @@
 namespace po = boost::program_options;
 
 #define TTL_VALUE		4
+
+std::vector<std::thread> threadPool;
 
 class Client {
 public:
@@ -29,6 +32,7 @@ public:
 	std::vector<std::pair<std::string, std::string>> serversFiles;
 	NetworkManager *nm;
 	FileManager *fm;
+	Logger logger;
 
 public: 
 	Client(int argc, const char *argv[]) : cmd_seq(0) {
@@ -114,89 +118,6 @@ public:
 		return udpSock;
 	}
 
-	std::vector<std::pair<std::string, uint64_t>> discover() {
-		std::vector<std::pair<std::string, uint64_t>> ret;
-		std::cout << "discover" << std::endl;
-		struct simpl_cmd *buffer = nm->generateSimplCmd("HELLO", getCmdSeq(), "");
-		uint64_t orgCmdSeq = buffer->cmd_seq;
-		std::cout << "SEND HELLO " << nm->getSizeWithData(SIMPL_STRUCT, 0) << " " << sizeof(buffer) << std::endl;
-		int length = nm->getSizeWithData(SIMPL_STRUCT, 0);
-		nm->sendCmd((const char*)buffer, length, remote_address);
-		delete buffer;
-
-		char *buff = (char*)malloc(MAX_UDP_SIZE);
-		while (true) {
-			struct sockaddr_in Sender_addr;
-			socklen_t slen = sizeof(struct sockaddr);
-			ssize_t rcv_len = recvfrom(nm->udpSock, buff, MAX_UDP_SIZE, 0, (struct sockaddr *)&Sender_addr, &slen);
-	        if (rcv_len < 0) {
-	        	break;
-	        } else {
-	        	buff[rcv_len] = 0;
-				struct cmplx_cmd *recvbuff = (struct cmplx_cmd*)buff;
-				std::cout << "Odebralem " << rcv_len << std::endl;
-				assert(orgCmdSeq == recvbuff->cmd_seq);
-				// dodaj handlowanie błędami
-				std::string ip = nm->getIpFromAddress(Sender_addr);
-				std::cout << recvbuff->cmd << " Found " << ip << " (" << recvbuff->data << ") with free space " << be64toh(recvbuff->param) << std::endl;
-				ret.push_back({ip, be64toh(recvbuff->param)});
-	        }
-	    }
-
-	    return ret;
-	    delete buff;
-	}
-
-	void fetch(std::string s) {
-		if (s.size() == 0 || s.size() == 1)
-			return;
-		if (s[0] == ' ')
-			s.erase(0, 1);
-
-		std::cout << "fetch " << s << std::endl;
-		int found = -1;
-		for (int i = 0; i < (int)serversFiles.size(); ++i) {
-			std::cout << serversFiles[i].first << std::endl;
-			if (serversFiles[i].first == s) 
-				found = i;
-		}
-		if (found == -1) {
-			std::cout << "File not found in last search." << std::endl;
-			return;
-		}
-
-		struct simpl_cmd *buffer = nm->generateSimplCmd("GET", getCmdSeq(), serversFiles[found].first);
-		uint64_t orgCmdSeq = buffer->cmd_seq;
-
-		int length = nm->getSizeWithData(SIMPL_STRUCT, s.size());
-		struct sockaddr_in address;
-		address.sin_family = AF_INET;
-		address.sin_port = htons(cmd_port);
-		if (inet_aton(serversFiles[found].second.c_str(), &address.sin_addr) == 0)
-		    syserr("inet_aton");
-		nm->sendCmd((const char*)buffer, length, address);
-		delete buffer;
-
-		char *buff = (char*)malloc(MAX_UDP_SIZE);
-		struct cmplx_cmd *recvbuff = NULL;
-		struct sockaddr_in Sender_addr;
-		socklen_t slen = sizeof(struct sockaddr);
-		ssize_t rcv_len = recvfrom(nm->udpSock, buff, MAX_UDP_SIZE, 0, (struct sockaddr *)&Sender_addr, &slen);
-		if (rcv_len < 0) {
-			
-		} else {
-			buff[rcv_len] = 0;
-			recvbuff = (struct cmplx_cmd*)buff;
-			assert(orgCmdSeq == recvbuff->cmd_seq);
-			// todo check if everything is correct
-			// uważaj na recvbuff->cmd
-			std::cout << be64toh(recvbuff->cmd_seq) << " " << recvbuff->cmd << " " << be64toh(recvbuff->param) << " " << recvbuff->data << std::endl;
-		}
-
-		getFile(serversFiles[found].second, be64toh(recvbuff->param), s);
-		delete buff;
-	}
-
 	int getTcpOnPort(std::string host, uint64_t port) {
 		struct addrinfo addr_hints;
 		struct addrinfo *addr_result;
@@ -227,10 +148,113 @@ public:
 		return sock;
 	}
 
+	std::vector<std::pair<uint64_t, std::string>> discover(bool ouput) {
+		std::vector<std::pair<uint64_t, std::string>> ret;
+		std::cout << "discover" << std::endl;
+		struct simpl_cmd *buffer = nm->generateSimplCmd("HELLO", getCmdSeq(), "");
+		uint64_t myCmdSeq = be64toh(buffer->cmd_seq);
+		int length = nm->getSizeWithData(SIMPL_STRUCT, 0);
+		nm->sendCmd((const char*)buffer, length, remote_address);
+		std::cout << "SEND HELLO " << nm->getSizeWithData(SIMPL_STRUCT, 0) << " " << sizeof(buffer) << std::endl;
+		delete buffer;
+
+		char *buff = (char*)malloc(MAX_UDP_SIZE + 1);
+		while (true) {
+			struct sockaddr_in Sender_addr;
+			socklen_t slen = sizeof(struct sockaddr);
+			ssize_t rcv_len = recvfrom(nm->udpSock, buff, MAX_UDP_SIZE, 0, (struct sockaddr *)&Sender_addr, &slen);
+	        if (rcv_len < 0) {
+	        	break;
+	        } else {
+	        	buff[rcv_len] = 0;
+				struct cmplx_cmd *recvbuff = (struct cmplx_cmd*)buff;
+				std::string ip = nm->getIpFromAddress(Sender_addr);
+				recvbuff->cmd_seq = be64toh(recvbuff->cmd_seq);
+				if (!nm->checkCmplxCmd(&logger, ip, (uint64_t)ntohs(Sender_addr.sin_port), recvbuff, "GOOD_DAY", myCmdSeq, "STH"))
+					continue;
+				std::cout << "Odebralem " << rcv_len << std::endl;
+				if (ouput) {
+					std::string toLog("Found " + ip + " (" + std::string(recvbuff->data) + ") with free space " 
+						+ std::to_string(be64toh(recvbuff->param)));
+					logger.log(toLog);
+				}
+				ret.push_back({be64toh(recvbuff->param), ip});
+	        }
+	    }
+
+	    delete buff;
+	    return ret;
+	}
+
+	void fetch(std::string s) {
+		if (s.size() == 0 || s.size() == 1)
+			return;
+		if (s[0] == ' ')
+			s.erase(0, 1);
+
+		std::cout << "fetch " << s << std::endl;
+		int found = -1;
+		for (int i = 0; i < (int)serversFiles.size(); ++i) {
+			if (serversFiles[i].first == s) 
+				found = i;
+		}
+		if (found == -1) {
+			logger.log("File " + s + " not found in last search.");
+			return;
+		}
+
+		struct simpl_cmd *buffer = nm->generateSimplCmd("GET", getCmdSeq(), serversFiles[found].first);
+		uint64_t orgCmdSeq = be64toh(buffer->cmd_seq);
+		int length = nm->getSizeWithData(SIMPL_STRUCT, s.size());
+		struct sockaddr_in address;
+		address.sin_family = AF_INET;
+		address.sin_port = htons(cmd_port);
+		if (inet_aton(serversFiles[found].second.c_str(), &address.sin_addr) == 0)
+		    syserr("inet_aton");
+		nm->sendCmd((const char*)buffer, length, address);
+		delete buffer;
+
+		char *buff = (char*)malloc(MAX_UDP_SIZE + 1);
+		struct cmplx_cmd *recvbuff = NULL;
+		struct sockaddr_in Sender_addr;
+		socklen_t slen = sizeof(struct sockaddr);
+		ssize_t rcv_len = recvfrom(nm->udpSock, buff, MAX_UDP_SIZE, 0, (struct sockaddr *)&Sender_addr, &slen);
+		if (rcv_len < 0) {
+			
+		} else {
+			buff[rcv_len] = 0;
+			recvbuff = (struct cmplx_cmd*)buff;
+			if (!nm->checkCmplxCmd(&logger, nm->getIpFromAddress(Sender_addr), (uint64_t)ntohs(Sender_addr.sin_port), recvbuff, "CONNECT_ME", orgCmdSeq, s)) {
+				delete buff;
+				return;
+			}
+			std::cout << be64toh(recvbuff->cmd_seq) << " " << recvbuff->cmd << " " << be64toh(recvbuff->param) << " " << recvbuff->data << std::endl;
+		}
+
+		// add thread
+		threadPool.push_back(std::thread(&Client::getFile, this, serversFiles[found].second, be64toh(recvbuff->param), s));
+		delete buff;
+	}
+
 	void getFile(std::string host, uint64_t port, std::string file) {
 		int sock = getTcpOnPort(host, port);
-		nm->receiveFile(sock, out_fldr + "/" + file);
-		std::cout << "Odebralem plik " << out_fldr + "/" + file << std::endl;
+		std::string err = nm->receiveFile(sock, out_fldr + "/" + file);
+		if (err == "")
+			logger.log("File " + file + "downloaded (" + host + ":" + std::to_string(port) + ")");
+		else 
+			logger.log("File " + file + "downloading failed (" + host + ":" + std::to_string(port) + ") " + err);
+		close(sock);
+	}
+
+	void sendFile(std::string host, uint64_t port, std::string file) {
+		int sock = getTcpOnPort(host, port);
+		std::string err = nm->sendFile(sock, file);
+		if (err == "") {
+			logger.log("File " + fm->getFileName(file) + " uploaded (" + host + ":" + std::to_string(port) + ")");
+		} else {
+			logger.log("File " + fm->getFileName(file) + "uploading failed (" + host + ":" + std::to_string(port) + ")");
+		}
+		std::cout << "Wysyłam plik " << file << std::endl;
 		close(sock);
 	}
 
@@ -240,13 +264,13 @@ public:
 			s.erase(0, 1);
 		std::cout << "search " << s << ";" << std::endl;
 		struct simpl_cmd *buffer = nm->generateSimplCmd("LIST", getCmdSeq(), s);
-		uint64_t orgCmdSeq = buffer->cmd_seq;
+		uint64_t orgCmdSeq = be64toh(buffer->cmd_seq);
 		int length = nm->getSizeWithData(SIMPL_STRUCT, s.size());
 		std::cout << "size " << length << std::endl;
 		nm->sendCmd((const char*)buffer, length, remote_address);
 		delete buffer;
 
-		char *buff = (char*)malloc(MAX_UDP_SIZE);
+		char *buff = (char*)malloc(MAX_UDP_SIZE + 1);
 		while (true) {
 			struct sockaddr_in Sender_addr;
 			socklen_t slen = sizeof(struct sockaddr);
@@ -256,26 +280,30 @@ public:
 	        } else {
 				buff[rcv_len] = 0;
 	        	struct simpl_cmd *recvbuff = (struct simpl_cmd*)buff;
+	        	std::string ip = nm->getIpFromAddress(Sender_addr);
+	        	std::cout << "1" << std::endl;
+	        	recvbuff->cmd_seq = be64toh(recvbuff->cmd_seq);
+	        	if (!nm->checkSimplCmd(&logger, ip, (uint64_t)ntohs(Sender_addr.sin_port), recvbuff, "MY_LIST", orgCmdSeq, "STH")) {
+	        		continue;
+	        	}
 				std::cout << "Odebralem " << recvbuff->cmd << " " << rcv_len << std::endl;
 	        	std::cout << recvbuff->cmd << " " << be64toh(recvbuff->cmd_seq) << std::endl;
-	        	assert(recvbuff->cmd_seq == orgCmdSeq);
-				std::string ip = nm->getIpFromAddress(Sender_addr);
 				std::string file = "";
+				std::string nextFile = "";
 				for (int i = 0; i < MAX_UDP_SIZE; ++i) {
 					if (recvbuff->data[i] == 0) 
 						break;
 					if (recvbuff->data[i] == '\n') {
-						serversFiles.push_back({file, std::string(ip)});
-						std::cout << " (" << ip << ")" << std::endl;
+						serversFiles.push_back({file, ip});
+						logger.log(file + " (" + ip + ")");
 						file = "";
 					}
 					else {
 						file += recvbuff->data[i];
-						std::cout << recvbuff->data[i];
 						if (recvbuff->data[i + 1] == 0) {
-							serversFiles.push_back({file, std::string(ip)});
+							serversFiles.push_back({file, ip});
+							logger.log(file + " (" + ip + ")");
 							file = "";
-							std::cout << " (" << ip << ")" << std::endl;
 							break;
 						}
 					}
@@ -284,8 +312,77 @@ public:
 		}
 	}
 
-	void upload(std::string s) {
+	void upload(std::string path) {
+		std::cout << "plik " << path << std::endl;
+		if (path.size() == 0 || path.size() == 1)
+			return;
+		if (path[0] == ' ')
+			path.erase(0, 1);
+		FILE *file = fopen(path.c_str(), "r");
+		if (file == NULL) {
+			logger.log("File " + path + "does not exist");
+			return;
+		}
 		std::cout << "upload" << std::endl;
+
+		std::vector<std::pair<uint64_t, std::string>> servers = discover(false);
+		bool sent = false;
+		char *buff = (char*)malloc(MAX_UDP_SIZE + 1);
+		uint64_t fileSize = (uint64_t)getFileSize(file);
+		for (int i = 0; i < (int)servers.size(); ++i) {
+			if (fileSize > servers[i].first) {
+				std::cout << fileSize << " " << servers[i].first << std::endl;
+				logger.log("File " + path + " too big");
+				break;
+			}
+			struct cmplx_cmd *buffer = nm->generateCmplxCmd("ADD", getCmdSeq(), fileSize, fm->getFileName(path));
+			uint64_t orgCmdSeq = be64toh(buffer->cmd_seq);
+			int length = nm->getSizeWithData(CMPLX_STRUCT, path.size());
+			struct sockaddr_in address;
+			address.sin_family = AF_INET;
+			address.sin_port = htons(cmd_port);
+			if (inet_aton(servers[i].second.c_str(), &address.sin_addr) == 0)
+			    syserr("inet_aton");
+			nm->sendCmd((const char*)buffer, length, address);
+			delete buffer;
+			struct sockaddr_in Sender_addr;
+			socklen_t slen = sizeof(struct sockaddr);
+			ssize_t rcv_len = recvfrom(nm->udpSock, buff, MAX_UDP_SIZE, 0, (struct sockaddr *)&Sender_addr, &slen);
+			buff[rcv_len] = 0;
+			std::string ip = nm->getIpFromAddress(Sender_addr);
+			if (rcv_len < 0)
+				continue;
+			std::string cmd = "";
+			for (int i = 0; i < 10; ++i) {
+				if (buff[i] == 0)
+					break;
+				cmd += buff[i];
+			}
+			if (cmd == "NO_WAY") {
+				// check corectness
+				struct simpl_cmd *recvStruct = (struct simpl_cmd*)buff;
+				recvStruct->cmd_seq = be64toh(recvStruct->cmd_seq);
+				nm->checkSimplCmd(&logger, ip, (uint64_t)ntohs(Sender_addr.sin_port), recvStruct, "NO_WAY", orgCmdSeq, fm->getFileName(path));
+				continue;
+			} else if (cmd == "CAN_ADD") {
+				// check corectness
+				struct cmplx_cmd *recvStruct = (struct cmplx_cmd*)buff;
+				if (nm->checkCmplxCmd(&logger, ip, (uint64_t)ntohs(Sender_addr.sin_port), recvStruct, "CAN_ADD", orgCmdSeq, ""))
+					continue;
+				sent = true;
+				threadPool.push_back(std::thread(&Client::sendFile, this, ip, be64toh(recvStruct->param), path));
+				break;
+			} else {
+				logger.logError(ip, (uint64_t)ntohs(Sender_addr.sin_port), "Wrong cmd.");
+				continue;
+			}
+		}
+
+		if (!sent) {
+			std::cout << "Nie udało isę" << std::endl;
+		}
+
+		delete buff;
 	}
 
 	void remove(std::string s) {
@@ -322,11 +419,11 @@ int main(int argc, const char *argv[]) {
 	while (true) {
 		std::getline(std::cin, command);
 		if (command == "exit") {
-			std::cout << "exiting program\n";
-			return 0;
+			client.logger.log("Got exiting command.");
+			break;
 		}
 		if (command == "discover") {
-			client.discover();
+			client.discover(true);
 			continue;
 		}
 		if ((int)command.size() >= 5) {
@@ -348,8 +445,13 @@ int main(int argc, const char *argv[]) {
 
                 if (remove_str == command_substr) {
                     client.remove(command.substr(6));
+                    continue;
                 }
             }
 		}
+		client.logger.log("[CL ERROR] Unknown command.");
 	}
+	
+	for (int i = 0; i < (int)threadPool.size(); ++i)
+		threadPool[i].join();
 }
