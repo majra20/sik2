@@ -15,6 +15,7 @@
 #include <mutex>
 #include <atomic>
 #include <map>
+#include <ctime>
 
 #include "cmd.h"
 #include "err.h"
@@ -76,8 +77,8 @@ public:
 		std::cout << "deklaruje size " << len << " " << sizeof(struct simpl_cmd) << std::endl;
 		struct simpl_cmd *ret = (struct simpl_cmd*)malloc(len + 1);
 		memcpy(ret, (struct simpl_cmd*)buffer, len);
-		for (int i = 0; i < len; ++i)
-			buffer[i] = 0;
+		// for (int i = 0; i < len; ++i)
+		// 	buffer[i] = 0;
 		ret->data[len - sizeof(struct simpl_cmd)] = 0;
 		ret->cmd_seq = be64toh(ret->cmd_seq);
 		std::cout << ret->cmd << " " << ret->cmd_seq << " " << ret->data << std::endl;
@@ -88,8 +89,8 @@ public:
 		std::cout << "deklaruje size " << len << " " << sizeof(struct cmplx_cmd) << std::endl;
 		struct cmplx_cmd *ret = (struct cmplx_cmd*)malloc(len + 1);
 		memcpy(ret, (struct cmplx_cmd*)buffer, len);
-		for (int i = 0; i < len; ++i)
-			buffer[i] = 0;
+		// for (int i = 0; i < len; ++i)
+		// 	buffer[i] = 0;
 		ret->data[len - sizeof(struct cmplx_cmd)] = 0;
 		ret->cmd_seq = be64toh(ret->cmd_seq);
 		ret->param = be64toh(ret->param);
@@ -141,12 +142,14 @@ public:
 		FILE *file = fopen(path.c_str(), "r");
 		long sendLen = getFileSize(file);		
 		char buf[FILE_PACKET_SIZE];
+		for (int i = 0; i < FILE_PACKET_SIZE; ++i)
+			buf[i] = 0;
 		int actPos = 0;
 	  	for (uint32_t i = 0; i < sendLen; ++i) {
 	  		buf[actPos++] = fgetc(file);
 	  		if (actPos + 1 == FILE_PACKET_SIZE) {
 	  			int len = sizeof(buf);
-			  	if (write(sock, buf, len) != len) {
+			  	if (write(sock, (char*)buf, len) != len) {
 			  		// if (errno == 0) {
 		  			// std::cout << "Błąd podczas wysyłania pliku. Timeout." << std::endl;
 		  			fclose(file);
@@ -281,6 +284,80 @@ public:
 		}
 
 		return true;
+	}
+
+	void setTimeout(unsigned int timeout) {
+		struct timeval t;
+	    t.tv_sec = timeout;
+	    t.tv_usec = 0;
+	    if (setsockopt(udpSock, SOL_SOCKET, SO_RCVTIMEO, (void*)&t, sizeof t)) {
+	        syserr("setsockopt timeout");
+	    }
+	    if (setsockopt(udpSock, SOL_SOCKET, SO_SNDTIMEO, (void*)&t, sizeof t)) {
+	        syserr("setsockopt timeout");
+	    }
+	}
+
+	std::vector<std::pair<struct simpl_cmd*, std::string>> recvSimplCmd(Logger *logger, int toRecv, struct sockaddr_in* addr, char* buff, unsigned int timeout, std::string toCheck1, uint64_t orgCmdSeq, std::string toCheck2) {
+		std::vector<std::pair<struct simpl_cmd*, std::string>> ret;
+		time_t start;
+		time(&start);
+		time_t end = start + timeout;
+		while (true) {
+			time_t now;
+			time(&now);
+			if (now >= end)
+				break;
+			setTimeout(difftime(end, now));
+			socklen_t slen = sizeof(struct sockaddr);
+			ssize_t rcv_len = recvfrom(udpSock, buff, toRecv, 0, (struct sockaddr *)addr, &slen);
+			if (rcv_len < 0) {
+	        	return ret;
+	        } else {
+				std::string ip = getIpFromAddress(*addr);
+	        	struct simpl_cmd *recvbuff = getSimplCmd(buff, rcv_len);
+	        	if (!checkSimplCmd(logger, ip, (uint64_t)ntohs(addr->sin_port), recvbuff, toCheck1, orgCmdSeq, toCheck2)) {
+	        		free(recvbuff);
+	        		continue;
+	        	}
+	        	ret.push_back({recvbuff, ip});
+	        }
+		}
+		time(&end);
+		std::cout << "Zajęło " << difftime(end, start) << std::endl;
+		setTimeout(timeout);
+		return ret;
+	}
+
+	std::vector<std::pair<struct cmplx_cmd*, std::string>> recvCmplxCmd(Logger *logger, int toRecv, struct sockaddr_in* addr, char* buff, unsigned int timeout, std::string toCheck1, uint64_t orgCmdSeq, std::string toCheck2) {
+		std::vector<std::pair<struct cmplx_cmd*, std::string>> ret;
+		time_t start;
+		time(&start);
+		time_t end = start + timeout;
+		while (true) {
+			time_t now;
+			time(&now);
+			if (now >= end)
+				break;
+			setTimeout(difftime(end, now));
+			socklen_t slen = sizeof(struct sockaddr);
+			ssize_t rcv_len = recvfrom(udpSock, buff, toRecv, 0, (struct sockaddr *)addr, &slen);
+			if (rcv_len < 0) {
+	        	return ret;
+	        } else {
+				std::string ip = getIpFromAddress(*addr);
+	        	struct cmplx_cmd *recvbuff = getCmplxCmd(buff, rcv_len);
+	        	if (!checkCmplxCmd(logger, ip, (uint64_t)ntohs(addr->sin_port), recvbuff, toCheck1, orgCmdSeq, toCheck2)) {
+	        		free(recvbuff);
+	        		continue;
+	        	}
+	        	ret.push_back({recvbuff, ip});
+	        }
+		}
+		time(&end);
+		std::cout << "Zajęło " << difftime(end, start) << std::endl;
+		setTimeout(timeout);
+		return ret;
 	}
 };
 

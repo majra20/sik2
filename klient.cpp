@@ -155,30 +155,21 @@ public:
 		free(buffer);
 
 		char *buff = (char*)malloc(MAX_UDP_SIZE + 1);
-		while (true) {
-			struct sockaddr_in Sender_addr;
-			socklen_t slen = sizeof(struct sockaddr);
-			ssize_t rcv_len = recvfrom(nm->udpSock, buff, MAX_UDP_SIZE, 0, (struct sockaddr *)&Sender_addr, &slen);
-	        if (rcv_len < 0) {
-	        	break;
-	        } else {
-	        	buff[rcv_len] = 0;
-				struct cmplx_cmd *recvbuff = (struct cmplx_cmd*)buff;
-				std::string ip = nm->getIpFromAddress(Sender_addr);
-				recvbuff->cmd_seq = be64toh(recvbuff->cmd_seq);
-				if (!nm->checkCmplxCmd(&logger, ip, (uint64_t)ntohs(Sender_addr.sin_port), recvbuff, "GOOD_DAY", myCmdSeq, "STH"))
-					continue;
-				std::cout << "Odebralem " << rcv_len << std::endl;
-				if (ouput) {
-					std::string toLog("Found " + ip + " (" + std::string(recvbuff->data) + ") with free space " 
-						+ std::to_string(be64toh(recvbuff->param)));
-					logger.log(toLog);
-				}
-				ret.push_back({be64toh(recvbuff->param), ip});
-	        }
+		struct sockaddr_in Sender_addr;
+		auto packets = nm->recvCmplxCmd(&logger, MAX_UDP_SIZE, &Sender_addr, buff, timeout, "GOOD_DAY", myCmdSeq, "STH");
+		free(buff);
+		for (auto packet : packets) {
+			struct cmplx_cmd *recvbuff = packet.first;
+			std::string ip = packet.second;
+			if (ouput) {
+				std::string toLog("Found " + ip + " (" + std::string(recvbuff->data) + ") with free space " 
+					+ std::to_string(recvbuff->param));
+				logger.log(toLog);
+			}
+			ret.push_back({recvbuff->param, ip});
 	    }
-
-	    free(buff);
+	    for (auto packet : packets)
+	    	free(packet.first);
 	    return ret;
 	}
 
@@ -250,7 +241,6 @@ public:
 
 	void sendFile(std::string host, uint64_t port, std::string file) {
 		int sock = getTcpOnPort(host, port);
-
 		std::string err = nm->sendFile(sock, file);
 		if (err == "") {
 			logger.log("File " + fm->getFileName(file) + " uploaded (" + host + ":" + std::to_string(port) + ")");
@@ -274,46 +264,38 @@ public:
 		free(buffer);
 
 		char *buff = (char*)malloc(MAX_UDP_SIZE + 1);
-		while (true) {
-			struct sockaddr_in Sender_addr;
-			socklen_t slen = sizeof(struct sockaddr);
-			ssize_t rcv_len = recvfrom(nm->udpSock, buff, MAX_UDP_SIZE, 0, (struct sockaddr *)&Sender_addr, &slen);
-	        if (rcv_len < 0) {
-	        	break;
-	        } else {
-				buff[rcv_len] = 0;
-	        	struct simpl_cmd *recvbuff = (struct simpl_cmd*)buff;
-	        	std::string ip = nm->getIpFromAddress(Sender_addr);
-	        	std::cout << "1" << std::endl;
-	        	recvbuff->cmd_seq = be64toh(recvbuff->cmd_seq);
-	        	if (!nm->checkSimplCmd(&logger, ip, (uint64_t)ntohs(Sender_addr.sin_port), recvbuff, "MY_LIST", orgCmdSeq, "STH")) {
-	        		continue;
-	        	}
-				std::cout << "Odebralem " << recvbuff->cmd << " " << rcv_len << std::endl;
-	        	std::cout << recvbuff->cmd << " " << be64toh(recvbuff->cmd_seq) << std::endl;
-				std::string file = "";
-				std::string nextFile = "";
-				for (int i = 0; i < MAX_UDP_SIZE; ++i) {
-					if (recvbuff->data[i] == 0) 
-						break;
-					if (recvbuff->data[i] == '\n') {
+		struct sockaddr_in Sender_addr;
+		auto packets = nm->recvSimplCmd(&logger, MAX_UDP_SIZE, &Sender_addr, buff, timeout, "MY_LIST", orgCmdSeq, "STH");
+		free(buff);
+        for (auto packet : packets) {
+        	struct simpl_cmd *recvbuff = packet.first;
+        	std::string ip = nm->getIpFromAddress(Sender_addr);
+        	// std::cout << "1" << std::endl;
+			// std::cout << "Odebralem " << recvbuff->cmd << " " << rcv_len << std::endl;
+        	// std::cout << recvbuff->cmd << " " << be64toh(recvbuff->cmd_seq) << std::endl;
+			std::string file = "";
+			std::string nextFile = "";
+			for (int i = 0; i < MAX_UDP_SIZE; ++i) {
+				if (recvbuff->data[i] == 0) 
+					break;
+				if (recvbuff->data[i] == '\n') {
+					serversFiles.push_back({file, ip});
+					logger.log(file + " (" + ip + ")");
+					file = "";
+				}
+				else {
+					file += recvbuff->data[i];
+					if (recvbuff->data[i + 1] == 0) {
 						serversFiles.push_back({file, ip});
 						logger.log(file + " (" + ip + ")");
 						file = "";
-					}
-					else {
-						file += recvbuff->data[i];
-						if (recvbuff->data[i + 1] == 0) {
-							serversFiles.push_back({file, ip});
-							logger.log(file + " (" + ip + ")");
-							file = "";
-							break;
-						}
+						break;
 					}
 				}
-	        }
-		}
-		free(buff);
+			}
+        }
+        for (auto packet : packets)
+        	free(packet.first);
 	}
 
 	void upload(std::string path) {
@@ -351,7 +333,7 @@ public:
 			free(buffer);
 			struct sockaddr_in Sender_addr;
 			socklen_t slen = sizeof(struct sockaddr);
-			ssize_t rcv_len = recvfrom(nm->udpSock, buff, MAX_UDP_SIZE, 0, (struct sockaddr *)&Sender_addr, &slen);
+			ssize_t rcv_len = recvfrom(nm->udpSock, buff, MAX_UDP_SIZE, 0, (struct sockaddr*)&Sender_addr, &slen);
 			buff[rcv_len] = 0;
 			std::string ip = nm->getIpFromAddress(Sender_addr);
 			if (rcv_len < 0)

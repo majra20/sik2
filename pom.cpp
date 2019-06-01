@@ -1,6 +1,9 @@
 #include <bits/stdc++.h>
+#include <ctime>
 
 int main() {
-	for (int i = 1; i <= 100000000; ++i)
-		printf("asd\n");
+	time_t start;
+	time(&start);
+	time_t end = start + 2;
+	std::cout << start << " " << end << std::endl;
 }
