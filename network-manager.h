@@ -215,30 +215,29 @@ public:
 
 	bool checkSimplCmd(Logger *logger, std::string ip, uint64_t port, struct simpl_cmd *dg, std::string cmd, uint64_t cmd_seq, std::string data) {
 		std::string dgCmd(dg->cmd);
-		if (dgCmd != cmd)
+		if (dgCmd != cmd) {
+			logger->logError(ip, port, "Wrong cmd.");
 			return false;
-		printf("2\n");
-		std::cout << dg->cmd_seq << " " << cmd_seq << std::endl;
-		if (dg->cmd_seq != cmd_seq)
+		}
+		if (dg->cmd_seq != cmd_seq) {
+			logger->logError(ip, port, "Wrong cmd_seq.");
 			return false;
+		}
 		std::string dgData(dg->data);
-		printf("3\n");
 		if (data == "" && dgData.size() != 0) {
-			printf("12\n");
 			logger->logError(ip, port, "Data should be empty.");
 			return false;
 		}
 		else if (data == "STH" && dgData.size() == 0) {
-			printf("4\n");
-			logger->logError(ip, port, "Data should contain something.");
-			return false;
+			if (dgCmd != "LIST") {
+				logger->logError(ip, port, "Data should contain something.");
+				return false;
+			}
 		}
 		else if (data != "STH" && data != "" && data != dgData) {
-			printf("5\n");
 			logger->logError(ip, port, "Data have invalid content.");
 			return false;
 		}
-		printf("6\n");
 
 		return true;
 	}

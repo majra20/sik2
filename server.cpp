@@ -21,12 +21,16 @@ namespace po = boost::program_options;
 
 #define QUEUE_LENGTH     5
 
+std::vector<std::thread> threadPool;
+char *buffer;
+
 void interrupted(int signal) {
 	std::cout << "Ktoś mi wykurwił bombe" << std::endl;
-	exit(0);
+	for (int i = 0; i < (int)threadPool.size(); ++i) 
+		threadPool[i].join();
+	delete buffer;
+	exit(1);
 }
-
-char *buffer;
 class Server {
 public:
 	std::vector<std::string> simpl = {"HELLO", "LIST", "DEL", "GET"};
@@ -36,6 +40,7 @@ public:
 	FileManager *fm;
 	NetworkManager *nm;
 	struct sockaddr_in local_address;
+	Logger logger;
 
 public: 
 	Server(int argc, const char *argv[]) {
@@ -125,7 +130,37 @@ public:
 		return udpSock;
 	}
 
+	int getTcpSock(uint64_t *port) {
+		int sock = socket(PF_INET, SOCK_STREAM, 0);
+		if (sock < 0)
+			syserr("socket");
+
+		struct timeval t;
+	    t.tv_sec = timeout;
+	    t.tv_usec = 0;
+		if (setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO,(struct timeval *)&t,sizeof(struct timeval)) < 0) 
+			syserr("setsockopt");
+		if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,(struct timeval *)&t,sizeof(struct timeval)) < 0) 
+			syserr("setsockopt");
+		struct sockaddr_in server_address;
+		server_address.sin_family = AF_INET;
+		server_address.sin_addr.s_addr = htonl(INADDR_ANY);
+		server_address.sin_port = 0;
+		if (bind(sock, (struct sockaddr *)&server_address, sizeof(server_address)) < 0)
+		    syserr("bind");
+		if (listen(sock, QUEUE_LENGTH) < 0)
+		    syserr("listen");
+		socklen_t len = sizeof(server_address);
+		if (getsockname(sock, (struct sockaddr*)&server_address, &len) < 0)
+			syserr("getsockname");
+		std::cout << "Otworzony tcp socket na porcie " << ntohs(server_address.sin_port) << std::endl;
+		*port = (uint64_t)ntohs(server_address.sin_port);
+		return sock;
+	}
+
 	void handleCmd(std::string cmd, struct sockaddr_in Sender_addr, int len) {
+		uint64_t port = (uint64_t)ntohs(Sender_addr.sin_port);
+		std::string ip = nm->getIpFromAddress(Sender_addr);
 		if (cmd == "ADD") {
 			receiveAdd(nm->getCmplxCmd(buffer, len), Sender_addr);
 			return;
@@ -144,16 +179,37 @@ public:
 		struct simpl_cmd *dg = nm->getSimplCmd(buffer, len);
 		for (int i = 0; i < len; ++i)
 			buffer[i] = 0;
-		if (cmd == "HELLO")
+		if (cmd == "HELLO") {
+			if (!nm->checkSimplCmd(&logger, ip, port, dg, "HELLO", dg->cmd_seq, "")) {
+				delete dg;
+				return;
+			}
 			receiveHello(dg, Sender_addr);
-		else if (cmd == "LIST")
+		}
+		else if (cmd == "LIST") {
+			if (!nm->checkSimplCmd(&logger, ip, port, dg, "LIST", dg->cmd_seq, "STH")) {
+				delete dg;
+				return;
+			}
 			receiveList(dg, Sender_addr);
-		else if (cmd == "DEL")
+		}
+		else if (cmd == "DEL") {
+			if (!nm->checkSimplCmd(&logger, ip, port, dg, "DEL", dg->cmd_seq, "STH")) {
+				delete dg;
+				return;
+			}
 			receiveDel(dg);
-		else if (cmd == "GET")
+		}
+		else if (cmd == "GET") {
+			if (!nm->checkSimplCmd(&logger, ip, port, dg, "GET", dg->cmd_seq, "STH")) {
+				delete dg;
+				return;
+			}
 			receiveGet(dg, Sender_addr); 
+		}
 		else {
-			//log it
+			// use it to log bad cmd, i know GET is not in this dg
+			nm->checkSimplCmd(&logger, ip, port, dg, "GET", 0, "");
 			std::cout << "Zły cmd" << std::endl;
 		}
 		return;
@@ -161,11 +217,6 @@ public:
 
 	void receiveHello(struct simpl_cmd *dg, struct sockaddr_in Sender_addr) {
 		std::string data(dg->data);
-		if (data.size() != 0) {
-			std::string ip = nm->getIpFromAddress(Sender_addr);
-			std::cout << "[PCKG ERROR]  Skipping invalid package from " << ip << ":" << Sender_addr.sin_port << std::endl;
-			return;
-		}
 		struct cmplx_cmd *buffer = nm->generateCmplxCmd("GOOD_DAY", dg->cmd_seq, fm->free_space, mcast_addr);
 		ssize_t length = nm->getSizeWithData(CMPLX_STRUCT, mcast_addr.size());
 		std::cout << "hello " << length << " " << sizeof(struct cmplx_cmd) << " " << mcast_addr.size() << std::endl;
@@ -225,6 +276,11 @@ public:
 		}
 		if (found == false) {
 			// log it TODO
+			std::string toLog("Server doesn't have file " + toGet + ".");
+			std::string ip = nm->getIpFromAddress(Sender_addr);
+			uint64_t port = (uint64_t)ntohs(Sender_addr.sin_port);
+			logger.logError(ip, port, toLog);
+			delete dg;
 			return;
 		}
 		uint64_t port;
@@ -234,25 +290,37 @@ public:
 		std::string path = getPathToFile(toGet);
 		nm->sendCmd((const char*)buffer, length, Sender_addr);
 		delete buffer;
-		std::thread t1(&Server::sendFileTcp, this, sock, path);
-		t1.join();
-
+		delete dg;
+		threadPool.push_back(std::thread(&Server::sendFileTcp, this, sock, path));
 	}
 
 	void receiveAdd(struct cmplx_cmd *dg, struct sockaddr_in Sender_addr) {
-		// sprawdz poprawność tej komendy
 		std::string file(dg->data);
 		bool isOkName = true;
 		for (auto c : file) {
 			if (c == '/')
 				isOkName = false;
 		}
-		if (!isOkName || file.size() == 0 || fm->free_space < dg->param || fm->exists(dg->data)) {
+		if (!isOkName || fm->free_space < dg->param || fm->exists(dg->data)) {
 			struct simpl_cmd *buffer = nm->generateSimplCmd("NO_WAY", dg->cmd_seq, file);
 			ssize_t length = nm->getSizeWithData(CMPLX_STRUCT, file.size());
 			nm->sendCmd((const char*)buffer, length, Sender_addr);
 			delete buffer;
 			delete dg;
+			std::string ip = nm->getIpFromAddress(Sender_addr);
+			uint64_t port = (uint64_t)ntohs(Sender_addr.sin_port);
+			if (!isOkName) {
+				logger.logError(ip, port, "File name contains \"/\" char.");
+				return;
+			}
+			if (fm->free_space < dg->param) {
+				logger.logError(ip, port, "Not enough free space.");
+				return;
+			}
+			if (fm->exists(dg->data)) {
+				logger.logError(ip, port, "Server already contains that data.");
+				return;
+			}
 			return;
 		}
 
@@ -263,9 +331,9 @@ public:
 		ssize_t length = nm->getSizeWithData(CMPLX_STRUCT, 0);
 		std::string path = fm->path + "/" + file;
 		nm->sendCmd((const char*)buff, length, Sender_addr);
+		threadPool.push_back(std::thread(&Server::receiveFileTcp, this, sock, path, file, (uint64_t)dg->param));
 		delete buff;
-		std::thread t1(&Server::receiveFileTcp, this, sock, path, file, (uint64_t)dg->param);
-		t1.join();
+		delete dg;
 	}
 
 	std::string getPathToFile(std::string file) {
@@ -286,7 +354,7 @@ public:
 		struct sockaddr_in clientAddress;
 		int msgSock = accept(sock, (struct sockaddr*)&clientAddress, &clientAddressLen);
 	
-		nm->sendFile(msgSock, path);
+		std::string err = nm->sendFile(msgSock, path);
 
 		fm->isBusy[path] = false;
 		close(msgSock);
@@ -300,7 +368,7 @@ public:
 		socklen_t clientAddressLen;
 		struct sockaddr_in clientAddress;
 		int msgSock = accept(sock, (struct sockaddr*)&clientAddress, &clientAddressLen);
-	
+		
 		if (nm->receiveFile(msgSock, path) == "") {
 			fm->files.insert(file);
 		} else {
@@ -310,34 +378,6 @@ public:
 		close(msgSock);
 		close(sock);
 		std::cout << "wyslalem" << std::endl;
-	}
-
-	int getTcpSock(uint64_t *port) {
-		int sock = socket(PF_INET, SOCK_STREAM, 0);
-		if (sock < 0)
-			syserr("socket");
-
-		struct timeval t;
-	    t.tv_sec = timeout;
-	    t.tv_usec = 0;
-		if (setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO,(struct timeval *)&t,sizeof(struct timeval)) < 0) 
-			syserr("setsockopt");
-		if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,(struct timeval *)&t,sizeof(struct timeval)) < 0) 
-			syserr("setsockopt");
-		struct sockaddr_in server_address;
-		server_address.sin_family = AF_INET;
-		server_address.sin_addr.s_addr = htonl(INADDR_ANY);
-		server_address.sin_port = 0;
-		if (bind(sock, (struct sockaddr *)&server_address, sizeof(server_address)) < 0)
-		    syserr("bind");
-		if (listen(sock, QUEUE_LENGTH) < 0)
-		    syserr("listen");
-		socklen_t len = sizeof(server_address);
-		if (getsockname(sock, (struct sockaddr*)&server_address, &len) < 0)
-			syserr("getsockname");
-		std::cout << "Otworzony tcp socket na porcie " << ntohs(server_address.sin_port) << std::endl;
-		*port = (uint64_t)ntohs(server_address.sin_port);
-		return sock;
 	}
 };
 
@@ -362,5 +402,7 @@ int main(int argc, const char *argv[]) {
 		std::cout << "Dostałem " << cmd << " handling" << std::endl;
 		server.handleCmd(cmd, Sender_addr, len);
 	}
+	for (int i = 0; i < (int)threadPool.size(); ++i) 
+		threadPool[i].join();
 	delete buffer;
 }
