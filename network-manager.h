@@ -60,6 +60,10 @@ public:
 
 	NetworkManager(int set_sock) : udpSock(set_sock) {}
 
+	~NetworkManager() {
+		close(udpSock);
+	}
+
 	int getSizeWithData(int type, int len) {
 		int size = (type == SIMPL_STRUCT ? sizeof(struct simpl_cmd) : sizeof(struct cmplx_cmd));
 		if (len == 0)
@@ -145,6 +149,7 @@ public:
 			  	if (write(sock, buf, len) != len) {
 			  		// if (errno == 0) {
 		  			// std::cout << "Błąd podczas wysyłania pliku. Timeout." << std::endl;
+		  			fclose(file);
 		  			return "Lost connection.";
 			  		// }
 			  		// syserr("partial / failed write");
@@ -154,6 +159,7 @@ public:
 			  	if (write(sock, buf, sizeof(char) * actPos) != (ssize_t)(sizeof(char) * actPos)) {
 			  		// if (errno == 0) {
 		  			// std::cout << "Błąd podczas wysyłania pliku. Timeout." << std::endl;
+		  			fclose(file);
 		  			return "Lost connection.";
 			  		// }
 			  		// syserr("partial / failed write");
@@ -219,6 +225,7 @@ public:
 			logger->logError(ip, port, "Wrong cmd.");
 			return false;
 		}
+		
 		if (dg->cmd_seq != cmd_seq) {
 			logger->logError(ip, port, "Wrong cmd_seq.");
 			return false;
@@ -253,6 +260,7 @@ public:
 			logger->logError(ip, port, "Wrong cmd.");
 			return false;
 		}
+		std::cout << dg->cmd_seq << " " << cmd_seq << std::endl;
 		if (dg->cmd_seq != cmd_seq) {
 			logger->logError(ip, port, "Wrong cmd_seq.");
 			return false;
@@ -305,9 +313,11 @@ public:
 
     void removeFile(std::string s) {
     	for (const auto &entry : fs::directory_iterator(path)) {
+    		std::string actName = entry.path().filename();
+    		std::cout << s << " " << actName << " " << isBusy[s] << " " << (entry.path().filename() == s) << std::endl;
     		if (fs::is_regular_file(entry.path()) && entry.path().filename() == s && !isBusy[s]) {
     			free_space += fs::file_size(entry.path());
-    			files.erase(entry.path().filename());
+    			files.erase(s);
     			fs::remove(entry.path());
     		}
     	}

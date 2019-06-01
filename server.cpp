@@ -24,13 +24,6 @@ namespace po = boost::program_options;
 std::vector<std::thread> threadPool;
 char *buffer;
 
-void interrupted(int signal) {
-	std::cout << "Ktoś mi wykurwił bombe" << std::endl;
-	for (int i = 0; i < (int)threadPool.size(); ++i) 
-		threadPool[i].join();
-	delete buffer;
-	exit(1);
-}
 class Server {
 public:
 	std::vector<std::string> simpl = {"HELLO", "LIST", "DEL", "GET"};
@@ -43,7 +36,7 @@ public:
 	Logger logger;
 
 public: 
-	Server(int argc, const char *argv[]) {
+	Server(int argc, const char *argv[]) {	
 		try {
 			po::options_description desc{"Parameters"};
             desc.add_options()
@@ -95,6 +88,7 @@ public:
 	}
 
 	~Server() {
+		std::cout << "Called destructor --------------------------------" << std::endl;
 		delete fm;
 		delete nm;
 	}
@@ -162,7 +156,9 @@ public:
 		uint64_t port = (uint64_t)ntohs(Sender_addr.sin_port);
 		std::string ip = nm->getIpFromAddress(Sender_addr);
 		if (cmd == "ADD") {
-			receiveAdd(nm->getCmplxCmd(buffer, len), Sender_addr);
+			struct cmplx_cmd *toSend = nm->getCmplxCmd(buffer, len);
+			receiveAdd(toSend, Sender_addr);
+			free(toSend);
 			return;
 		}
 		bool isOk = false;
@@ -181,28 +177,28 @@ public:
 			buffer[i] = 0;
 		if (cmd == "HELLO") {
 			if (!nm->checkSimplCmd(&logger, ip, port, dg, "HELLO", dg->cmd_seq, "")) {
-				delete dg;
+				free(dg);
 				return;
 			}
 			receiveHello(dg, Sender_addr);
 		}
 		else if (cmd == "LIST") {
 			if (!nm->checkSimplCmd(&logger, ip, port, dg, "LIST", dg->cmd_seq, "STH")) {
-				delete dg;
+				free(dg);
 				return;
 			}
 			receiveList(dg, Sender_addr);
 		}
 		else if (cmd == "DEL") {
 			if (!nm->checkSimplCmd(&logger, ip, port, dg, "DEL", dg->cmd_seq, "STH")) {
-				delete dg;
+				free(dg);
 				return;
 			}
 			receiveDel(dg);
 		}
 		else if (cmd == "GET") {
 			if (!nm->checkSimplCmd(&logger, ip, port, dg, "GET", dg->cmd_seq, "STH")) {
-				delete dg;
+				free(dg);
 				return;
 			}
 			receiveGet(dg, Sender_addr); 
@@ -212,6 +208,7 @@ public:
 			nm->checkSimplCmd(&logger, ip, port, dg, "GET", 0, "");
 			std::cout << "Zły cmd" << std::endl;
 		}
+		free(dg);
 		return;
 	}
 
@@ -221,8 +218,7 @@ public:
 		ssize_t length = nm->getSizeWithData(CMPLX_STRUCT, mcast_addr.size());
 		std::cout << "hello " << length << " " << sizeof(struct cmplx_cmd) << " " << mcast_addr.size() << std::endl;
 	    nm->sendCmd((const char *)buffer, length, Sender_addr);
-	    delete dg;
-	    delete buffer;
+	    free(buffer);
 	}
 
 	void receiveList(struct simpl_cmd *dg, struct sockaddr_in Sender_addr) {
@@ -235,7 +231,7 @@ public:
 					buffer = nm->generateSimplCmd("MY_LIST", dg->cmd_seq, fileList);
 					ssize_t length = nm->getSizeWithData(SIMPL_STRUCT, fileList.size());
 					nm->sendCmd((const char*)buffer, length, Sender_addr);
-				    delete buffer;
+				    free(buffer);
 				    fileList = "";
 				}
 				if (fileList.size() == 0)
@@ -253,9 +249,8 @@ public:
 			ssize_t length = nm->getSizeWithData(SIMPL_STRUCT, fileList.size());
 			std::cout << "wysłany pakiet ma " << length << std::endl;
 			nm->sendCmd((const char*)buffer, length, Sender_addr);
-			delete buffer;
+			free(buffer);
 		}
-		delete dg;
 	}
 
 	void receiveDel(struct simpl_cmd *dg) {
@@ -280,7 +275,6 @@ public:
 			std::string ip = nm->getIpFromAddress(Sender_addr);
 			uint64_t port = (uint64_t)ntohs(Sender_addr.sin_port);
 			logger.logError(ip, port, toLog);
-			delete dg;
 			return;
 		}
 		uint64_t port;
@@ -289,8 +283,7 @@ public:
 		ssize_t length = nm->getSizeWithData(CMPLX_STRUCT, toGet.size());
 		std::string path = getPathToFile(toGet);
 		nm->sendCmd((const char*)buffer, length, Sender_addr);
-		delete buffer;
-		delete dg;
+		free(buffer);
 		threadPool.push_back(std::thread(&Server::sendFileTcp, this, sock, path));
 	}
 
@@ -302,18 +295,17 @@ public:
 				isOkName = false;
 		}
 		if (!isOkName || fm->free_space < dg->param || fm->exists(dg->data)) {
-			struct simpl_cmd *buffer = nm->generateSimplCmd("NO_WAY", dg->cmd_seq, file);
-			ssize_t length = nm->getSizeWithData(CMPLX_STRUCT, file.size());
-			nm->sendCmd((const char*)buffer, length, Sender_addr);
-			delete buffer;
-			delete dg;
+			struct simpl_cmd *buffer2 = nm->generateSimplCmd("NO_WAY", dg->cmd_seq, file);
+			ssize_t length = nm->getSizeWithData(SIMPL_STRUCT, file.size());
+			nm->sendCmd((const char*)buffer2, length, Sender_addr);
+			free(buffer2);
 			std::string ip = nm->getIpFromAddress(Sender_addr);
 			uint64_t port = (uint64_t)ntohs(Sender_addr.sin_port);
 			if (!isOkName) {
 				logger.logError(ip, port, "File name contains \"/\" char.");
 				return;
 			}
-			if (fm->free_space < dg->param) {
+			if (fm->free_space < (dg->param)) {
 				logger.logError(ip, port, "Not enough free space.");
 				return;
 			}
@@ -332,8 +324,7 @@ public:
 		std::string path = fm->path + "/" + file;
 		nm->sendCmd((const char*)buff, length, Sender_addr);
 		threadPool.push_back(std::thread(&Server::receiveFileTcp, this, sock, path, file, (uint64_t)dg->param));
-		delete buff;
-		delete dg;
+		free(buff);
 	}
 
 	std::string getPathToFile(std::string file) {
@@ -350,8 +341,8 @@ public:
 	void sendFileTcp(int sock, std::string path) {
 		std::cout << "Send file " << std::endl;
 
-		socklen_t clientAddressLen;
 		struct sockaddr_in clientAddress;
+		socklen_t clientAddressLen = sizeof(clientAddress);
 		int msgSock = accept(sock, (struct sockaddr*)&clientAddress, &clientAddressLen);
 	
 		std::string err = nm->sendFile(msgSock, path);
@@ -365,8 +356,8 @@ public:
 	void receiveFileTcp(int sock, std::string path, std::string file, uint64_t size) {
 		std::cout << "Receive file " << path << std::endl;
 
-		socklen_t clientAddressLen;
 		struct sockaddr_in clientAddress;
+		socklen_t clientAddressLen = sizeof(clientAddress);
 		int msgSock = accept(sock, (struct sockaddr*)&clientAddress, &clientAddressLen);
 		
 		if (nm->receiveFile(msgSock, path) == "") {
@@ -381,10 +372,21 @@ public:
 	}
 };
 
+Server *server;
+void interrupted(int signal) {
+	std::cout << "Ktoś mi wykurwił bombe" << std::endl;
+	for (int i = 0; i < (int)threadPool.size(); ++i) 
+		threadPool[i].join();
+	free(buffer);
+	delete server;
+	exit(1);
+}
+
 int main(int argc, const char *argv[]) {
+	// Server server(argc, argv);
+	server = new Server(argc, argv);
 	std::signal(SIGINT, interrupted);
-	Server server(argc, argv);
-	int sock = server.nm->udpSock;
+	int sock = server->nm->udpSock;
 	buffer = (char*)malloc(MAX_UDP_SIZE);
 	while (true) {
 		struct sockaddr_in Sender_addr;
@@ -400,9 +402,9 @@ int main(int argc, const char *argv[]) {
 			cmd += buffer[i];
 		}
 		std::cout << "Dostałem " << cmd << " handling" << std::endl;
-		server.handleCmd(cmd, Sender_addr, len);
+		server->handleCmd(cmd, Sender_addr, len);
 	}
 	for (int i = 0; i < (int)threadPool.size(); ++i) 
 		threadPool[i].join();
-	delete buffer;
+	free(buffer);
 }
