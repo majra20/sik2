@@ -20,7 +20,7 @@
 #include "cmd.h"
 #include "err.h"
 
-#define MAX_UDP_SIZE 			512000
+#define MAX_UDP_SIZE 			64000
 #define CMD_SIZE 				10
 #define SIMPL_STRUCT 			0
 #define CMPLX_STRUCT 			1
@@ -74,19 +74,16 @@ public:
 	}
 
 	struct simpl_cmd *getSimplCmd(char* buffer, int len) {
-		std::cout << "deklaruje size " << len << " " << sizeof(struct simpl_cmd) << std::endl;
 		struct simpl_cmd *ret = (struct simpl_cmd*)malloc(len + 1);
 		memcpy(ret, (struct simpl_cmd*)buffer, len);
 		// for (int i = 0; i < len; ++i)
 		// 	buffer[i] = 0;
 		ret->data[len - sizeof(struct simpl_cmd)] = 0;
 		ret->cmd_seq = be64toh(ret->cmd_seq);
-		std::cout << ret->cmd << " " << ret->cmd_seq << " " << ret->data << std::endl;
 		return ret;
 	}
 
 	struct cmplx_cmd *getCmplxCmd(char* buffer, int len) {
-		std::cout << "deklaruje size " << len << " " << sizeof(struct cmplx_cmd) << std::endl;
 		struct cmplx_cmd *ret = (struct cmplx_cmd*)malloc(len + 1);
 		memcpy(ret, (struct cmplx_cmd*)buffer, len);
 		// for (int i = 0; i < len; ++i)
@@ -94,7 +91,6 @@ public:
 		ret->data[len - sizeof(struct cmplx_cmd)] = 0;
 		ret->cmd_seq = be64toh(ret->cmd_seq);
 		ret->param = be64toh(ret->param);
-		std::cout << ret->cmd << " " << ret->cmd_seq << " " << ret->param << " " << ret->data << std::endl;
 		return ret;
 	}
 
@@ -112,7 +108,6 @@ public:
 	}
 
 	struct simpl_cmd *generateSimplCmd(std::string cmd, uint64_t cmd_seq, std::string data) {
-		std::cout << "seq " << cmd_seq << std::endl;
 		int size = getSizeWithData(SIMPL_STRUCT, data.size());
 		struct simpl_cmd *ret = (struct simpl_cmd*)malloc(size);
 		strcpy(ret->cmd, cmd.c_str());
@@ -125,7 +120,6 @@ public:
 	}
 
 	void sendCmd(const char *buffer, ssize_t length, struct sockaddr_in addr) {
-		std::cout << "Sending cmd: " << buffer << " : length : " << length << std::endl;
 		socklen_t slen = sizeof(struct sockaddr);
 	    if (sendto(udpSock, (const char*)buffer, length, 0, (struct sockaddr *)&addr, slen) != length) 
 	    	syserr("sendto");
@@ -151,7 +145,6 @@ public:
 	  			int len = sizeof(buf);
 			  	if (write(sock, (char*)buf, len) != len) {
 			  		// if (errno == 0) {
-		  			// std::cout << "Błąd podczas wysyłania pliku. Timeout." << std::endl;
 		  			fclose(file);
 		  			return "Lost connection.";
 			  		// }
@@ -161,7 +154,6 @@ public:
 	  		} else if (i + (uint32_t)1 == sendLen) {
 			  	if (write(sock, buf, sizeof(char) * actPos) != (ssize_t)(sizeof(char) * actPos)) {
 			  		// if (errno == 0) {
-		  			// std::cout << "Błąd podczas wysyłania pliku. Timeout." << std::endl;
 		  			fclose(file);
 		  			return "Lost connection.";
 			  		// }
@@ -173,29 +165,6 @@ public:
 	  	return "";
 	}
 
-	void receivePacket(int sock, char fileContent[], ssize_t sizeToRecv) {
-		size_t prevLen = 0;
-		ssize_t len;
-		do {
-			ssize_t remains = sizeToRecv - prevLen; // number of bytes to be read
-			len = read(sock, ((char*)fileContent) + prevLen, remains);
-			if (len < 0) {
-				// if (errno == 0) {
-	  			std::cout << "Błąd podczas odbierania pliku. Timeout." << std::endl;
-	  			break; 
-		  		// }
-				// syserr("reading from client socket");
-			}
-			else if (len > 0) {
-				prevLen += len;
-				if ((ssize_t)prevLen == sizeToRecv) {
-					prevLen = 0;
-					break;
-				}
-			}
-		} while (len > 0);
-	}
-
 	std::string receiveFile(int sock, std::string path) {
 		FILE *file = fopen(path.c_str(), "r+");
 		if (file == NULL)
@@ -203,14 +172,12 @@ public:
 
 		char fileContent[FILE_PACKET_SIZE];
 		ssize_t len;
-		std::cout << "zaczynam odbieranie "<< std::endl;
 		while (true) {
 			len = read(sock, (char*)fileContent, FILE_PACKET_SIZE);
 			std::cout << "odebralem " << len << std::endl;
 			if (len == 0)
 				break;
 			if (len < 0) {
-				// std::cout << "Błąd podczas odbierania pliku. Timeout." << std::endl;
 				return "Lost connection.";
 			}
 			for (int i = 0; i < len; ++i) {
@@ -263,7 +230,6 @@ public:
 			logger->logError(ip, port, "Wrong cmd.");
 			return false;
 		}
-		std::cout << dg->cmd_seq << " " << cmd_seq << std::endl;
 		if (dg->cmd_seq != cmd_seq) {
 			logger->logError(ip, port, "Wrong cmd_seq.");
 			return false;
@@ -375,7 +341,6 @@ public:
             if (fs::is_regular_file(entry.path())) {
                 files.insert(entry.path().filename());
                 isBusy[entry.path().filename()] = false;
-                std::cout << entry.path().filename() << std::endl;
                 unsigned int k = fs::file_size(entry.path());
                 if (k > free_space)
                     free_space = 0;
@@ -383,15 +348,11 @@ public:
                     free_space -= k;
             }
         }
-        for (auto a : files)
-        	std::cout << "MAM " << a << std::endl;
-        std::cout << free_space << std::endl;
     }
 
     void removeFile(std::string s) {
     	for (const auto &entry : fs::directory_iterator(path)) {
     		std::string actName = entry.path().filename();
-    		std::cout << s << " " << actName << " " << isBusy[s] << " " << (entry.path().filename() == s) << std::endl;
     		if (fs::is_regular_file(entry.path()) && entry.path().filename() == s && !isBusy[s]) {
     			free_space += fs::file_size(entry.path());
     			files.erase(s);
@@ -417,10 +378,8 @@ public:
 	}
 
 	bool exists(std::string file) {
-		std::cout << "sprawdzam czy istnieje " << file << std::endl;
 		if (files.find(file) == files.end())
 			return false;
-		std::cout << "nie istnieje" << std::endl;
 		return true;
 	}
 };

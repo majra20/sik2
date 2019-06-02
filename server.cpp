@@ -88,7 +88,6 @@ public:
 	}
 
 	~Server() {
-		std::cout << "Called destructor --------------------------------" << std::endl;
 		delete fm;
 		delete nm;
 	}
@@ -147,7 +146,6 @@ public:
 		socklen_t len = sizeof(server_address);
 		if (getsockname(sock, (struct sockaddr*)&server_address, &len) < 0)
 			syserr("getsockname");
-		std::cout << "Otworzony tcp socket na porcie " << ntohs(server_address.sin_port) << std::endl;
 		*port = (uint64_t)ntohs(server_address.sin_port);
 		return sock;
 	}
@@ -166,7 +164,6 @@ public:
 			if (cmd == s)
 				isOk = true;
 		}
-		std::cout << "Dostałem taką komende2 " << cmd << std::endl;
 		if (!isOk) {
 			std::string ip = nm->getIpFromAddress(Sender_addr);
 			std::cout << "[PCKG ERROR] Skipping invalid package from " << ip << ":" << Sender_addr.sin_port << ". Bad cmd argument." << std::endl;
@@ -206,7 +203,6 @@ public:
 		else {
 			// use it to log bad cmd, i know GET is not in this dg
 			nm->checkSimplCmd(&logger, ip, port, dg, "GET", 0, "");
-			std::cout << "Zły cmd" << std::endl;
 		}
 		free(dg);
 		return;
@@ -216,7 +212,6 @@ public:
 		std::string data(dg->data);
 		struct cmplx_cmd *buffer = nm->generateCmplxCmd("GOOD_DAY", dg->cmd_seq, fm->free_space, mcast_addr);
 		ssize_t length = nm->getSizeWithData(CMPLX_STRUCT, mcast_addr.size());
-		std::cout << "hello " << length << " " << sizeof(struct cmplx_cmd) << " " << mcast_addr.size() << std::endl;
 	    nm->sendCmd((const char *)buffer, length, Sender_addr);
 	    free(buffer);
 	}
@@ -243,24 +238,19 @@ public:
 
 		if (fileList.size() != 0) {
 			buffer = nm->generateSimplCmd("MY_LIST", dg->cmd_seq, fileList);
-			std::cout << "WYSYŁAM " << fileList << std::endl;
 			std::string ip = nm->getIpFromAddress(Sender_addr);
-			std::cout << "IP :: " << ip << std::endl;
 			ssize_t length = nm->getSizeWithData(SIMPL_STRUCT, fileList.size());
-			std::cout << "wysłany pakiet ma " << length << std::endl;
 			nm->sendCmd((const char*)buffer, length, Sender_addr);
 			free(buffer);
 		}
 	}
 
 	void receiveDel(struct simpl_cmd *dg) {
-		std::cout << dg->cmd << " " << dg->data << std::endl;
 		std::string file(dg->data);
 		fm->removeFile(file);
 	}
 
 	void receiveGet(struct simpl_cmd *dg, struct sockaddr_in Sender_addr) {
-		std::cout << dg->cmd << " " << dg->data << std::endl;
 		bool found = false;
 		std::string toGet(dg->data);
 		for (auto i : fm->files) {
@@ -330,7 +320,6 @@ public:
 	std::string getPathToFile(std::string file) {
 		for (const auto & entry : fs::directory_iterator(fm->path)) {
             if (fs::is_regular_file(entry.path()) && file == entry.path().filename()) {
-                std::cout << entry.path() << std::endl;
                 return entry.path();
             }
         }
@@ -339,7 +328,6 @@ public:
 	}
 
 	void sendFileTcp(int sock, std::string path) {
-		std::cout << "Send file " << std::endl;
 
 		struct sockaddr_in clientAddress;
 		socklen_t clientAddressLen = sizeof(clientAddress);
@@ -350,11 +338,9 @@ public:
 		fm->isBusy[path] = false;
 		close(msgSock);
 		close(sock);
-		std::cout << "wyslalem" << std::endl;
 	}
 
 	void receiveFileTcp(int sock, std::string path, std::string file, uint64_t size) {
-		std::cout << "Receive file " << path << std::endl;
 
 		struct sockaddr_in clientAddress;
 		socklen_t clientAddressLen = sizeof(clientAddress);
@@ -368,13 +354,13 @@ public:
 
 		close(msgSock);
 		close(sock);
-		std::cout << "wyslalem" << std::endl;
 	}
 };
 
 Server *server;
 void interrupted(int signal) {
-	std::cout << "Ktoś mi wykurwił bombe" << std::endl;
+	server->logger.log("Got signal " + std::to_string(signal));
+	server->logger.log("Exiting. Waiting for all connections to end.");
 	for (int i = 0; i < (int)threadPool.size(); ++i) 
 		threadPool[i].join();
 	free(buffer);
@@ -401,7 +387,6 @@ int main(int argc, const char *argv[]) {
 				break;
 			cmd += buffer[i];
 		}
-		std::cout << "Dostałem " << cmd << " handling" << std::endl;
 		server->handleCmd(cmd, Sender_addr, len);
 	}
 	for (int i = 0; i < (int)threadPool.size(); ++i) 

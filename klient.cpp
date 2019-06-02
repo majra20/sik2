@@ -1,4 +1,4 @@
-#include <iostream>
+	#include <iostream>
 #include <boost/program_options.hpp>
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -85,7 +85,6 @@ public:
 	~Client() {
 		delete nm;
 		delete fm;
-		std::cout << "Destructor " << std::endl;
 	}
 
 	int getUDPSock() {
@@ -121,7 +120,6 @@ public:
 		addr_hints.ai_family = AF_INET;
 		addr_hints.ai_socktype = SOCK_STREAM;
 		addr_hints.ai_protocol = IPPROTO_TCP;
-		std::cout << "otwieram " << host << " " << port << std::endl;
 		int err = getaddrinfo(host.c_str(), std::to_string(port).c_str(), &addr_hints, &addr_result);
 		if (err == EAI_SYSTEM)
 			syserr("getaddrinfo: %s", gai_strerror(err));
@@ -146,12 +144,10 @@ public:
 
 	std::vector<std::pair<uint64_t, std::string>> discover(bool ouput) {
 		std::vector<std::pair<uint64_t, std::string>> ret;
-		std::cout << "discover" << std::endl;
 		struct simpl_cmd *buffer = nm->generateSimplCmd("HELLO", getCmdSeq(), "");
 		uint64_t myCmdSeq = be64toh(buffer->cmd_seq);
 		int length = nm->getSizeWithData(SIMPL_STRUCT, 0);
 		nm->sendCmd((const char*)buffer, length, remote_address);
-		std::cout << "SEND HELLO " << nm->getSizeWithData(SIMPL_STRUCT, 0) << " " << sizeof(buffer) << std::endl;
 		free(buffer);
 
 		char *buff = (char*)malloc(MAX_UDP_SIZE + 1);
@@ -166,7 +162,7 @@ public:
 					+ std::to_string(recvbuff->param));
 				logger.log(toLog);
 			}
-			ret.push_back({recvbuff->param, ip});
+			ret.push_back({(uint64_t)recvbuff->param, ip});
 	    }
 	    for (auto packet : packets)
 	    	free(packet.first);
@@ -183,7 +179,6 @@ public:
 			return;
 		}
 
-		std::cout << "fetch " << s << std::endl;
 		int found = -1;
 		for (int i = 0; i < (int)serversFiles.size(); ++i) {
 			if (serversFiles[i].first == s) 
@@ -221,7 +216,6 @@ public:
 				free(buff);
 				return;
 			}
-			std::cout << be64toh(recvbuff->cmd_seq) << " " << recvbuff->cmd << " " << be64toh(recvbuff->param) << " " << recvbuff->data << std::endl;
 		}
 
 		// add thread
@@ -247,7 +241,6 @@ public:
 		} else {
 			logger.log("File " + fm->getFileName(file) + "uploading failed (" + host + ":" + std::to_string(port) + ")");
 		}
-		std::cout << "Wysyłam plik " << file << std::endl;
 		close(sock);
 	}
 
@@ -255,11 +248,9 @@ public:
 		serversFiles.clear();
 		if (s.size() > 0 && s[0] == ' ')
 			s.erase(0, 1);
-		std::cout << "search " << s << ";" << std::endl;
 		struct simpl_cmd *buffer = nm->generateSimplCmd("LIST", getCmdSeq(), s);
 		uint64_t orgCmdSeq = be64toh(buffer->cmd_seq);
 		int length = nm->getSizeWithData(SIMPL_STRUCT, s.size());
-		std::cout << "size " << length << std::endl;
 		nm->sendCmd((const char*)buffer, length, remote_address);
 		free(buffer);
 
@@ -270,9 +261,6 @@ public:
         for (auto packet : packets) {
         	struct simpl_cmd *recvbuff = packet.first;
         	std::string ip = nm->getIpFromAddress(Sender_addr);
-        	// std::cout << "1" << std::endl;
-			// std::cout << "Odebralem " << recvbuff->cmd << " " << rcv_len << std::endl;
-        	// std::cout << recvbuff->cmd << " " << be64toh(recvbuff->cmd_seq) << std::endl;
 			std::string file = "";
 			std::string nextFile = "";
 			for (int i = 0; i < MAX_UDP_SIZE; ++i) {
@@ -299,7 +287,6 @@ public:
 	}
 
 	void upload(std::string path) {
-		std::cout << "plik " << path << std::endl;
 		if (path.size() == 0 || path.size() == 1)
 			return;
 		if (path[0] == ' ')
@@ -309,15 +296,14 @@ public:
 			logger.log("File " + path + " does not exist");
 			return;
 		}
-		std::cout << "upload" << std::endl;
 
 		std::vector<std::pair<uint64_t, std::string>> servers = discover(false);
 		bool sent = false;
 		char *buff = (char*)malloc(MAX_UDP_SIZE + 1);
 		uint64_t fileSize = (uint64_t)getFileSize(file);
+		fclose(file);
 		for (int i = 0; i < (int)servers.size(); ++i) {
 			if (fileSize > servers[i].first) {
-				std::cout << fileSize << " " << servers[i].first << std::endl;
 				logger.log("File " + path + " too big");
 				break;
 			}
@@ -354,7 +340,6 @@ public:
 				// check corectness
 				struct cmplx_cmd *recvStruct = (struct cmplx_cmd*)buff;
 				recvStruct->cmd_seq = be64toh(recvStruct->cmd_seq);
-				std::cout << "MAM TAK " << orgCmdSeq << " " << recvStruct->cmd_seq << std::endl;
 				if (!nm->checkCmplxCmd(&logger, ip, (uint64_t)ntohs(Sender_addr.sin_port), recvStruct, "CAN_ADD", orgCmdSeq, ""))
 					continue;
 				sent = true;
@@ -367,14 +352,12 @@ public:
 		}
 
 		if (!sent) {
-			std::cout << "Nie udało isę" << std::endl;
 		}
 
 		free(buff);
 	}
 
 	void remove(std::string s) {
-		std::cout << "remove" << std::endl;
 		if (s.size() == 0 || s.size() == 1)
 			return;
 		if (s[0] == ' ')
@@ -390,7 +373,6 @@ private:
 	uint64_t getCmdSeq() {
 		// może być mutex śmierdzący
 		uint64_t ret = cmd_seq;
-		std::cout << "biore " << ret << std::endl;
 		cmd_seq++;
 		return ret;
 	}
@@ -398,10 +380,6 @@ private:
 
 int main(int argc, const char *argv[]) {
 	Client client(argc, argv);
-	std::cout << client.mcast_addr << std::endl;
-	std::cout << client.cmd_port << std::endl;
-	std::cout << client.out_fldr << std::endl;
-	std::cout << client.timeout << std::endl;
 
 	std::string command, search_str("search"), fetch_str("fetch"), upload_str("upload"), remove_str("remove");
 	while (true) {
@@ -451,7 +429,7 @@ int main(int argc, const char *argv[]) {
 		}
 		client.logger.log("[CL ERROR] Unknown command.");
 	}
-	
+	client.logger.log("Exiting. Waiting for all connections to end.");
 	for (int i = 0; i < (int)threadPool.size(); ++i)
 		threadPool[i].join();
 }
