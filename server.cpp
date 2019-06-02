@@ -260,7 +260,6 @@ public:
 			}
 		}
 		if (found == false) {
-			// log it TODO
 			std::string toLog("Server doesn't have file " + toGet + ".");
 			std::string ip = nm->getIpFromAddress(Sender_addr);
 			uint64_t port = (uint64_t)ntohs(Sender_addr.sin_port);

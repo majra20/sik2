@@ -239,7 +239,7 @@ public:
 		if (err == "") {
 			logger.log("File " + fm->getFileName(file) + " uploaded (" + host + ":" + std::to_string(port) + ")");
 		} else {
-			logger.log("File " + fm->getFileName(file) + "uploading failed (" + host + ":" + std::to_string(port) + ")");
+			logger.log("File " + fm->getFileName(file) + " uploading failed (" + host + ":" + std::to_string(port) + ")");
 		}
 		close(sock);
 	}
@@ -260,7 +260,7 @@ public:
 		free(buff);
         for (auto packet : packets) {
         	struct simpl_cmd *recvbuff = packet.first;
-        	std::string ip = nm->getIpFromAddress(Sender_addr);
+        	std::string ip = packet.second;
 			std::string file = "";
 			std::string nextFile = "";
 			for (int i = 0; i < MAX_UDP_SIZE; ++i) {
@@ -293,23 +293,25 @@ public:
 			path.erase(0, 1);
 		FILE *file = fopen(path.c_str(), "r");
 		if (file == NULL) {
-			logger.log("File " + path + " does not exist");
+			logger.log("File " + fm->getFileName(path) + " does not exist");
 			return;
 		}
 
 		std::vector<std::pair<uint64_t, std::string>> servers = discover(false);
-		bool sent = false;
+		bool answer = false;
 		char *buff = (char*)malloc(MAX_UDP_SIZE + 1);
 		uint64_t fileSize = (uint64_t)getFileSize(file);
 		fclose(file);
-		for (int i = 0; i < (int)servers.size(); ++i) {
+		for (int i = (int)servers.size() - 1; i >= 0; --i) {
 			if (fileSize > servers[i].first) {
-				logger.log("File " + path + " too big");
+				answer = true;
+				logger.log("File " + fm->getFileName(path) + " too big");
 				break;
 			}
+			std::cout << "wysyłam do " << servers[i].second << std::endl;
 			struct cmplx_cmd *buffer = nm->generateCmplxCmd("ADD", getCmdSeq(), fileSize, fm->getFileName(path));
 			uint64_t orgCmdSeq = be64toh(buffer->cmd_seq);
-			int length = nm->getSizeWithData(CMPLX_STRUCT, path.size());
+			int length = nm->getSizeWithData(CMPLX_STRUCT, fm->getFileName(path).size());
 			struct sockaddr_in address;
 			address.sin_family = AF_INET;
 			address.sin_port = htons(cmd_port);
@@ -320,10 +322,10 @@ public:
 			struct sockaddr_in Sender_addr;
 			socklen_t slen = sizeof(struct sockaddr);
 			ssize_t rcv_len = recvfrom(nm->udpSock, buff, MAX_UDP_SIZE, 0, (struct sockaddr*)&Sender_addr, &slen);
-			buff[rcv_len] = 0;
-			std::string ip = nm->getIpFromAddress(Sender_addr);
 			if (rcv_len < 0)
 				continue;
+			buff[rcv_len] = 0;
+			std::string ip = nm->getIpFromAddress(Sender_addr);
 			std::string cmd = "";
 			for (int i = 0; i < 10; ++i) {
 				if (buff[i] == 0)
@@ -342,7 +344,8 @@ public:
 				recvStruct->cmd_seq = be64toh(recvStruct->cmd_seq);
 				if (!nm->checkCmplxCmd(&logger, ip, (uint64_t)ntohs(Sender_addr.sin_port), recvStruct, "CAN_ADD", orgCmdSeq, ""))
 					continue;
-				sent = true;
+				answer = true;
+
 				threadPool.push_back(std::thread(&Client::sendFile, this, ip, be64toh(recvStruct->param), path));
 				break;
 			} else {
@@ -351,7 +354,8 @@ public:
 			}
 		}
 
-		if (!sent) {
+		if (!answer) {
+			logger.log("File " + fm->getFileName(path) + " too big");
 		}
 
 		free(buff);

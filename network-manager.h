@@ -76,8 +76,6 @@ public:
 	struct simpl_cmd *getSimplCmd(char* buffer, int len) {
 		struct simpl_cmd *ret = (struct simpl_cmd*)malloc(len + 1);
 		memcpy(ret, (struct simpl_cmd*)buffer, len);
-		// for (int i = 0; i < len; ++i)
-		// 	buffer[i] = 0;
 		ret->data[len - sizeof(struct simpl_cmd)] = 0;
 		ret->cmd_seq = be64toh(ret->cmd_seq);
 		return ret;
@@ -86,8 +84,6 @@ public:
 	struct cmplx_cmd *getCmplxCmd(char* buffer, int len) {
 		struct cmplx_cmd *ret = (struct cmplx_cmd*)malloc(len + 1);
 		memcpy(ret, (struct cmplx_cmd*)buffer, len);
-		// for (int i = 0; i < len; ++i)
-		// 	buffer[i] = 0;
 		ret->data[len - sizeof(struct cmplx_cmd)] = 0;
 		ret->cmd_seq = be64toh(ret->cmd_seq);
 		ret->param = be64toh(ret->param);
@@ -120,6 +116,9 @@ public:
 	}
 
 	void sendCmd(const char *buffer, ssize_t length, struct sockaddr_in addr) {
+		std::string cmd = "";
+		for (int i = 0; i < 10; ++i)
+			cmd += (char)buffer[i];
 		socklen_t slen = sizeof(struct sockaddr);
 	    if (sendto(udpSock, (const char*)buffer, length, 0, (struct sockaddr *)&addr, slen) != length) 
 	    	syserr("sendto");
@@ -144,20 +143,14 @@ public:
 	  		if (actPos + 1 == FILE_PACKET_SIZE) {
 	  			int len = sizeof(buf);
 			  	if (write(sock, (char*)buf, len) != len) {
-			  		// if (errno == 0) {
 		  			fclose(file);
 		  			return "Lost connection.";
-			  		// }
-			  		// syserr("partial / failed write");
 			  	}
 			  	actPos = 0;
 	  		} else if (i + (uint32_t)1 == sendLen) {
 			  	if (write(sock, buf, sizeof(char) * actPos) != (ssize_t)(sizeof(char) * actPos)) {
-			  		// if (errno == 0) {
 		  			fclose(file);
 		  			return "Lost connection.";
-			  		// }
-			  		// syserr("partial / failed write");
 			  	}
 	  		}
 	  	}
@@ -174,7 +167,6 @@ public:
 		ssize_t len;
 		while (true) {
 			len = read(sock, (char*)fileContent, FILE_PACKET_SIZE);
-			std::cout << "odebralem " << len << std::endl;
 			if (len == 0)
 				break;
 			if (len < 0) {
@@ -290,7 +282,6 @@ public:
 	        }
 		}
 		time(&end);
-		std::cout << "Zajęło " << difftime(end, start) << std::endl;
 		setTimeout(timeout);
 		return ret;
 	}
@@ -321,7 +312,6 @@ public:
 	        }
 		}
 		time(&end);
-		std::cout << "Zajęło " << difftime(end, start) << std::endl;
 		setTimeout(timeout);
 		return ret;
 	}
